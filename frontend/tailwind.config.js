@@ -2,33 +2,20 @@
 export default {
   content: [
     "./index.html",
-    "./scr/**/*.{js,jsx,ts,tsx}",
+    "./src/**/*.{js,ts,jsx,tsx}",  // <--- ENSURE THIS LINE IS EXACT
   ],
   theme: {
     extend: {
-      colors: {
-        red: {
-          600: "#dc2626",
-          900: "#7f1d1d",
-        },
-        yellow: {
-          500: "#eab308",
-        },
-        green: {
-          500: "#22c55e",
-        },
-        zinc: {
-          800: "#27272a",
-          900: "#18181b",
-        },
-        gray: {
-          400: "#9ca3af",
-          500: "#6b7280",
-          600: "#4b5563",
-        },
-        black: "#000000",
+      animation: {
+        'breathe': 'breathe 8s ease-in-out infinite',
       },
+      keyframes: {
+        breathe: {
+          '0%, 100%': { opacity: '0.4', transform: 'scale(1)' },
+          '50%': { opacity: '0.7', transform: 'scale(1.1)' },
+        }
+      }
     },
   },
   plugins: [],
-};
+}
