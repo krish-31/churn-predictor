@@ -1,3 +1,8 @@
+# Environment Variables
+.env
+.env.local
+
+# Python
 Documents/
 __pycache__/
 *.pyc
@@ -19,6 +24,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Node
 node_modules/
-.env
+
+# OS
 .DS_Store
