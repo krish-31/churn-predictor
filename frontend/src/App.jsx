@@ -5,19 +5,29 @@ import {
   Upload, FileText, BarChart3, Users, 
   AlertTriangle, DollarSign, Search, CheckCircle2,
   ChevronRight, Play, RefreshCcw, TrendingDown,
-  Activity, Target, Cpu, Layers
+  Activity, Target, Cpu, Layers, FileCode2
 } from 'lucide-react';
 
 const App = () => {
+  // --- STATE MANAGEMENT ---
+  const [activeTab, setActiveTab] = useState('churn'); 
   const [file, setFile] = useState(null);
+  const [driftFile, setDriftFile] = useState(null); 
+
   const [data, setData] = useState(null); 
   const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [driftMetrics, setDriftMetrics] = useState(null); 
+  const [overallDriftStatus, setOverallDriftStatus] = useState("Unknown");
+
+  const [loading, setLoading] = useState(false); 
+  const [driftLoading, setDriftLoading] = useState(false); 
+
   const [searchTerm, setSearchTerm] = useState("");
   const [backendHealth, setBackendHealth] = useState(false);
   const [modelStats, setModelStats] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  // --- INITIALIZATION ---
   useEffect(() => {
     const checkHealth = async () => {
       try {
@@ -43,39 +53,31 @@ const App = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const validateAndSetFile = (selectedFile) => {
+  // --- HANDLERS ---
+  const validateAndSetFile = (selectedFile, isDrift = false) => {
     const fileName = selectedFile?.name || "";
     const isValid = fileName.endsWith('.csv') || fileName.endsWith('.xlsx');
 
     if (selectedFile && isValid) {
-      setFile(selectedFile);
+      if (isDrift) setDriftFile(selectedFile);
+      else setFile(selectedFile);
     } else {
       alert("Please select a valid CSV or Excel (.xlsx) file.");
     }
   };
 
-  const handleFileUpload = (e) => {
-    validateAndSetFile(e.target.files[0]);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e) => {
+  const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+  
+  const handleDrop = (e, isDrift = false) => {
     e.preventDefault();
     setIsDragging(false);
     const droppedFile = e.dataTransfer.files[0];
-    validateAndSetFile(droppedFile);
+    validateAndSetFile(droppedFile, isDrift);
   };
 
-  const runAnalysis = async () => {
+  // --- 1. RUN PREDICTION ---
+  const runPrediction = async () => {
     if (!file) return alert("Please upload a dataset first.");
     setLoading(true);
     const formData = new FormData();
@@ -88,15 +90,60 @@ const App = () => {
       setData(response.data.data);
       setSummary(response.data.summary);
     } catch (err) {
-      console.error("Analysis Error:", err);
-      if (err.response && err.response.status >= 400 && err.response.status < 500) {
-        alert(`📁 DATASET ERROR:\n${err.response.data.detail}`);
-      } else {
-        alert("⚠️ PROCESSING ERROR: Check backend logs.");
-      }
+      console.error("Prediction Error:", err);
+      alert("⚠️ PROCESSING ERROR: Check backend logs.");
     } finally {
       setLoading(false);
     }
+  };
+
+  // --- 2. RUN DRIFT ANALYSIS (With STRICT Threshold Check) ---
+  const runDriftAnalysis = async () => {
+    if (!driftFile) return alert("Please upload a dataset for drift analysis.");
+    setDriftLoading(true);
+    setDriftMetrics(null); 
+    
+    const formData = new FormData();
+    formData.append('file', driftFile);
+
+    try {
+      const response = await axios.post('http://127.0.0.1:8000/drift/analyze', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      
+      const metrics = response.data;
+      setDriftMetrics(metrics);
+
+      // Unwrap nested data if necessary
+      const actualData = metrics.features || metrics.drift_metrics || metrics;
+      
+      // STRICT CHECK: Determine Overall Status based on VALUES, not just labels
+      let isSevere = false;
+      if (actualData && typeof actualData === 'object') {
+        Object.values(actualData).forEach(m => {
+          // If ANY metric exceeds the safe threshold, flag as Severe
+          if (m?.psi > 0.25 || m?.ks_pvalue < 0.05 || m?.js_divergence > 0.10) {
+            isSevere = true;
+          }
+        });
+      }
+      setOverallDriftStatus(isSevere ? "Severe" : "Normal");
+
+    } catch (err) {
+      console.error("Drift Error:", err);
+      alert("⚠️ DRIFT ERROR: Check backend logs or ensure baseline.csv is correct.");
+    } finally {
+      setDriftLoading(false);
+    }
+  };
+
+  // --- HELPER: Extract Columns ---
+  const getDriftColumns = () => {
+    if (!driftMetrics) return [];
+    const columns = driftMetrics.features || driftMetrics.drift_metrics || driftMetrics;
+    return Object.entries(columns).filter(([key, val]) => {
+      return val && typeof val === 'object' && ('psi' in val || 'drift_status' in val);
+    });
   };
 
   const filteredData = useMemo(() => {
@@ -115,225 +162,310 @@ const App = () => {
       />
 
       <div className="max-w-7xl mx-auto px-6 py-12">
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-end mb-12 gap-4">
-          <div>
+        
+        {/* --- HEADER --- */}
+        <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-4">
+          <div className="flex-1">
             <h1 className="text-5xl font-black text-red-600 italic tracking-tighter">RETENTION HQ</h1>
-            <p className="text-gray-500 font-medium uppercase tracking-[0.25em] text-[10px] mt-2">Enterprise Batch Inference Engine</p>
+            <p className="text-gray-500 font-medium uppercase tracking-[0.25em] text-[10px] mt-2">Enterprise ML Intelligence Console</p>
           </div>
-          <div className="text-left md:text-right">
-            <p className="text-[10px] text-gray-600 font-bold uppercase tracking-widest">System Health</p>
-            <div className={`flex items-center gap-2 text-sm font-bold mt-1 ${backendHealth ? 'text-green-500' : 'text-red-500'}`}>
+
+          <div className="flex bg-zinc-900/80 p-1 rounded-full border border-zinc-800">
+            <button 
+              onClick={() => setActiveTab('churn')}
+              className={`px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'churn' ? 'bg-zinc-800 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              Churn Engine
+            </button>
+            <button 
+              onClick={() => setActiveTab('drift')}
+              className={`px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'drift' ? 'bg-yellow-500 text-black shadow-lg shadow-yellow-500/20' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              Drift Detection
+            </button>
+          </div>
+
+          <div className="flex-1 text-right">
+             <div className={`inline-flex items-center gap-2 text-xs font-bold ${backendHealth ? 'text-green-500' : 'text-red-500'}`}>
               <div className={`w-2 h-2 rounded-full animate-pulse ${backendHealth ? 'bg-green-500' : 'bg-red-500'}`} /> 
               {backendHealth ? 'ML Engine Active' : 'ML Engine Offline'}
             </div>
           </div>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-12">
-          <div 
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className={`lg:col-span-3 bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 ${isDragging ? 'border-red-600 bg-red-600/5 scale-[1.01]' : 'border-zinc-800'}`}
-          >
-            <div className="flex-1 w-full">
-              <label className="flex items-center gap-4 cursor-pointer group">
-                <div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-red-600 text-white border-red-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-red-500/50 group-hover:text-red-500'}`}>
-                  <Upload size={24} className={isDragging ? 'animate-bounce' : ''} />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-gray-200">
-                    {file ? file.name : isDragging ? "Drop File Here" : "Upload or Drag & Drop Dataset"}
-                  </p>
-                  <p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p>
-                </div>
-                <input type="file" className="hidden" onChange={handleFileUpload} accept=".csv, .xlsx" />
-              </label>
-            </div>
-            <button 
-              onClick={runAnalysis}
-              disabled={loading || !file}
-              className="w-full md:w-auto px-10 py-4 bg-red-600 hover:bg-red-700 disabled:bg-zinc-800 disabled:text-gray-500 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 active:scale-95"
-            >
-              {loading ? <RefreshCcw className="animate-spin" size={18}/> : <><Play size={16} fill="currentColor"/> Process Batch</>}
-            </button>
-          </div>
-
-          <div className="bg-zinc-900/40 border border-zinc-800 rounded-2xl p-6 backdrop-blur-xl flex flex-col justify-center items-center text-center">
-            <div className="flex items-center gap-2 mb-2 text-gray-500">
-              <CheckCircle2 size={14}/>
-              <span className="text-[10px] font-black uppercase tracking-widest">Schema Validation</span>
-            </div>
-            <button 
-              onClick={() => alert("Columns Required:\ncustomer_id, age, gender, subscription_type, watch_hours, last_login_days, region, device, monthly_fee, number_of_profiles, avg_watch_time_per_day, favorite_genre, payment_method")}
-              className="text-[10px] font-bold text-red-500 hover:text-red-400 uppercase transition-colors"
-            >
-              Verify Columns
-            </button>
-          </div>
-        </div>
-
-        <AnimatePresence mode="wait">
-          {summary ? (
-            <motion.div key="results" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-              
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-12">
-                {[
-                  { label: "Total Population", val: summary.total_customers, icon: Users, color: "text-blue-500" },
-                  { label: "Avg Churn Risk", val: `${summary.avg_risk_score}%`, icon: BarChart3, color: "text-purple-500" },
-                  { label: "High Risk Count", val: summary.high_risk_count, icon: AlertTriangle, color: "text-red-500" },
-                  { label: "Revenue at Risk", val: `$${summary.revenue_at_risk.toLocaleString()}`, icon: DollarSign, color: "text-yellow-500" },
-                  { label: "System Drift", val: summary.drift_level, icon: Activity, color: summary.drift_level === 'High' ? 'text-red-500' : 'text-green-500' }
-                ].map((kpi, i) => (
-                  <div key={i} className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
-                    <div className="flex justify-between items-start mb-3">
-                      <kpi.icon className={kpi.color} size={16} />
-                      <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">{kpi.label}</span>
+        {/* ===================================================================================== */}
+        {/* PAGE 1: CHURN PREDICTION DASHBOARD                                                   */}
+        {/* ===================================================================================== */}
+        {activeTab === 'churn' && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-12">
+              <div 
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, false)}
+                className={`lg:col-span-3 bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 ${isDragging ? 'border-red-600 bg-red-600/5 scale-[1.01]' : 'border-zinc-800'}`}
+              >
+                <div className="flex-1 w-full">
+                  <label className="flex items-center gap-4 cursor-pointer group">
+                    <div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-red-600 text-white border-red-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-red-500/50 group-hover:text-red-500'}`}>
+                      <Upload size={24} className={isDragging ? 'animate-bounce' : ''} />
                     </div>
-                    <div className={`text-2xl font-black tracking-tighter ${kpi.label === 'System Drift' && summary.drift_level === 'High' ? 'animate-pulse text-red-500' : 'text-gray-100'}`}>
-                      {kpi.val}
+                    <div>
+                      <p className="text-sm font-bold text-gray-200">
+                        {file ? file.name : isDragging ? "Drop File Here" : "Upload or Drag & Drop Dataset"}
+                      </p>
+                      <p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p>
                     </div>
-                  </div>
-                ))}
+                    <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], false)} accept=".csv, .xlsx" />
+                  </label>
+                </div>
+                
+                <button 
+                  onClick={runPrediction}
+                  disabled={loading || !file}
+                  className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-zinc-800 disabled:text-gray-500 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 active:scale-95 shadow-lg shadow-red-900/20"
+                >
+                  {loading ? <RefreshCcw className="animate-spin" size={18}/> : <><Play size={16} fill="currentColor"/> Process Batch</>}
+                </button>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-12">
-                <div className="lg:col-span-1 bg-zinc-900/40 border border-zinc-800 rounded-3xl p-6 backdrop-blur-sm h-fit">
-                   <h3 className="text-[10px] font-black uppercase text-gray-500 tracking-widest mb-8 flex items-center gap-2">
-                     <Users size={14}/> Segmentation Breakdown
-                   </h3>
-                   <div className="space-y-8">
-                     {[
-                       { label: 'High Risk', count: summary.high_risk_count, color: 'bg-red-600' },
-                       { label: 'Medium Risk', count: summary.medium_risk_count, color: 'bg-yellow-600' },
-                       { label: 'Low Risk', count: summary.low_risk_count, color: 'bg-green-600' }
-                     ].map((seg, i) => (
-                       <div key={i}>
-                         <div className="flex justify-between text-[10px] font-bold mb-2">
-                           <span className="text-gray-400">{seg.label}</span>
-                           <span className="text-gray-100">
-                             {summary.total_customers > 0 ? Math.round((seg.count / summary.total_customers) * 100) : 0}%
-                           </span>
-                         </div>
-                         <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
-                           <motion.div 
-                             initial={{ width: 0 }} 
-                             animate={{ width: `${(seg.count / summary.total_customers) * 100}%` }}
-                             transition={{ duration: 1, ease: "easeOut" }}
-                             className={`${seg.color} h-full`} 
-                           />
-                         </div>
-                         <p className="text-[9px] text-gray-600 mt-1 uppercase font-bold">{seg.count} Users</p>
-                       </div>
-                     ))}
-                   </div>
+              <div className="bg-zinc-900/40 border border-zinc-800 rounded-2xl p-6 backdrop-blur-xl flex flex-col justify-center items-center text-center">
+                <div className="flex items-center gap-2 mb-2 text-gray-500">
+                  <CheckCircle2 size={14}/>
+                  <span className="text-[10px] font-black uppercase tracking-widest">Schema Validation</span>
                 </div>
+                <button 
+                  onClick={() => alert("Columns Required:\ncustomer_id, age, gender, subscription_type, watch_hours, last_login_days, region, device, monthly_fee, number_of_profiles, avg_watch_time_per_day, favorite_genre, payment_method")}
+                  className="text-[10px] font-bold text-red-500 hover:text-red-400 uppercase transition-colors"
+                >
+                  Verify Columns
+                </button>
+              </div>
+            </div>
 
-                <div className="lg:col-span-3 bg-zinc-900/40 border border-zinc-800 rounded-3xl overflow-hidden backdrop-blur-md shadow-2xl">
-                  <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/20">
-                    <h2 className="text-sm font-black uppercase tracking-tighter flex items-center gap-2">
-                      <div className="w-1.5 h-4 bg-red-600 rounded-full"/> Analysis Drill-Down
-                    </h2>
-                    <div className="relative flex-1 max-w-sm ml-4">
-                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-600" size={14}/>
-                      <input 
-                        placeholder="Search Customer ID..." 
-                        className="w-full bg-black/40 border border-zinc-800 rounded-full py-2.5 pl-10 pr-4 text-xs outline-none focus:ring-1 focus:ring-red-600 transition-all"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                      />
+            <AnimatePresence mode="wait">
+              {summary ? (
+                <motion.div key="results" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-12">
+                    <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
+                      <div className="flex justify-between items-start mb-3"><Users className="text-blue-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Total Population</span></div>
+                      <div className="text-2xl font-black text-gray-100">{summary.total_customers}</div>
+                    </div>
+                    <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
+                      <div className="flex justify-between items-start mb-3"><BarChart3 className="text-purple-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Avg Churn Risk</span></div>
+                      <div className="text-2xl font-black text-gray-100">{summary.avg_risk_score}%</div>
+                    </div>
+                    <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
+                      <div className="flex justify-between items-start mb-3"><AlertTriangle className="text-red-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">High Risk</span></div>
+                      <div className="text-2xl font-black text-gray-100">{summary.high_risk_count}</div>
+                    </div>
+                    <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
+                      <div className="flex justify-between items-start mb-3"><DollarSign className="text-yellow-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Revenue Risk</span></div>
+                      <div className="text-2xl font-black text-gray-100">${summary.revenue_at_risk.toLocaleString()}</div>
                     </div>
                   </div>
-                  <div className="overflow-x-auto max-h-[600px] scrollbar-hide">
-                    <table className="w-full text-left">
-                      <thead className="sticky top-0 bg-[#0a0a0a] z-10 border-b border-zinc-800">
-                        <tr className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
-                          <th className="px-8 py-5">Customer ID</th>
-                          <th className="px-6 py-5 text-center">Prob.</th>
-                          <th className="px-6 py-5 text-center">Persona</th>
-                          <th className="px-6 py-5 text-center">Category</th>
-                          <th className="px-6 py-5">Recommendation</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-800/50">
-                        {filteredData.map((row, idx) => (
-                          <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
-                            <td className="px-8 py-5 font-mono text-xs text-red-500 font-bold italic">
-                              {row.customer_id.toString().slice(0, 15)}...
-                            </td>
-                            <td className="px-6 py-5 text-center font-black text-lg">{row.churn_probability}%</td>
-                            <td className="px-6 py-5 text-center">
-                              {/* FIXED: whitespace-nowrap and inline-flex w-28 to prevent ugly text wrapping */}
-                              <span className="px-2 py-1 rounded border border-blue-500/20 bg-blue-500/10 text-[9px] font-black text-blue-400 uppercase whitespace-nowrap inline-flex items-center justify-center w-28">
-                                {row.persona}
+
+                  {/* TABLE & SEGMENTATION */}
+                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-12">
+                    <div className="lg:col-span-1 bg-zinc-900/40 border border-zinc-800 rounded-3xl p-6 backdrop-blur-sm h-fit">
+                      <h3 className="text-[10px] font-black uppercase text-gray-500 tracking-widest mb-8 flex items-center gap-2">
+                        <Users size={14}/> Segmentation Breakdown
+                      </h3>
+                      <div className="space-y-8">
+                        {[
+                          { label: 'High Risk', count: summary.high_risk_count, color: 'bg-red-600' },
+                          { label: 'Medium Risk', count: summary.medium_risk_count, color: 'bg-yellow-600' },
+                          { label: 'Low Risk', count: summary.low_risk_count, color: 'bg-green-600' }
+                        ].map((seg, i) => (
+                          <div key={i}>
+                            <div className="flex justify-between text-[10px] font-bold mb-2">
+                              <span className="text-gray-400">{seg.label}</span>
+                              <span className="text-gray-100">
+                                {summary.total_customers > 0 ? Math.round((seg.count / summary.total_customers) * 100) : 0}% 
+                                <span className="text-gray-500 ml-1">({seg.count} Users)</span>
                               </span>
-                            </td>
-                            <td className="px-6 py-5 text-center">
-                              <span className={`px-3 py-1 rounded text-[9px] font-black uppercase tracking-widest ${
-                                row.risk_category === 'High' ? 'bg-red-500/10 text-red-500' : 
-                                row.risk_category === 'Medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-green-500/10 text-green-500'
-                              }`}>
-                                {row.risk_category}
-                              </span>
-                            </td>
-                            <td className="px-6 py-5 text-xs text-gray-400 italic leading-relaxed">{row.insight}</td>
-                          </tr>
+                            </div>
+                            <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                              <motion.div initial={{ width: 0 }} animate={{ width: `${(seg.count / summary.total_customers) * 100}%` }} transition={{ duration: 1, ease: "easeOut" }} className={`${seg.color} h-full`} />
+                            </div>
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          ) : (
-            <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-96 border-2 border-dashed border-zinc-800 rounded-[2.5rem] flex flex-col items-center justify-center text-center p-6 bg-zinc-900/10">
-              <div className="p-6 bg-zinc-900 rounded-full mb-6 border border-zinc-800">
-                <FileText size={40} className="text-zinc-700 animate-pulse"/>
-              </div>
-              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Inference Engine Standby</h3>
-              <p className="text-xs text-gray-600 mt-2 max-w-xs italic leading-relaxed">
-                Drag and drop a CSV or Excel batch file to identify at-risk subscriber segments and generate retention strategies.
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div className="mt-16 pt-12 border-t border-zinc-800">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h2 className="text-xl font-black italic text-red-600 tracking-tighter">MODEL BENCHMARK SUITE</h2>
-              <p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mt-1">Cross-Validation Performance Results</p>
-            </div>
-            <div className="px-4 py-2 bg-red-600/10 border border-red-600/30 rounded-full text-[10px] font-black text-red-500 uppercase tracking-widest">Engine: XGBoost</div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {modelStats ? Object.entries(modelStats).map(([key, stats]) => (
-              <div key={key} className={`p-6 rounded-3xl border transition-all ${key === 'xg' ? 'bg-red-600/5 border-red-500/30 ring-1 ring-red-500/20' : 'bg-zinc-900/40 border-zinc-800'}`}>
-                <div className="flex justify-between items-center mb-6">
-                  <div className="flex items-center gap-2">
-                    {key === 'xg' ? <Cpu size={14} className="text-red-500"/> : key === 'rf' ? <Layers size={14} className="text-gray-400"/> : <Target size={14} className="text-gray-400"/>}
-                    <span className="text-[10px] font-black uppercase text-gray-400">{key === 'xg' ? 'Extreme Gradient Boosting' : key === 'rf' ? 'Random Forest' : 'Logistic Regression'}</span>
-                  </div>
-                </div>
-                <div className="text-4xl font-black mb-6 tracking-tighter">{stats.accuracy}% <span className="text-[8px] text-gray-600 uppercase tracking-widest">Accuracy</span></div>
-                <div className="space-y-4">
-                  {['Precision', 'Recall', 'F1-Score'].map((label, i) => (
-                    <div key={label}>
-                      <div className="flex justify-between text-[8px] font-black uppercase text-gray-600 mb-1">
-                        <span>{label}</span>
-                        <span className="text-gray-100">{Object.values(stats)[i+1]}%</span>
-                      </div>
-                      <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-                        <motion.div initial={{ width: 0 }} animate={{ width: `${Object.values(stats)[i+1]}%` }} className={`h-full ${key === 'xg' ? 'bg-red-500' : 'bg-zinc-600'}`} />
                       </div>
                     </div>
-                  ))}
+
+                    <div className="lg:col-span-3 bg-zinc-900/40 border border-zinc-800 rounded-3xl overflow-hidden backdrop-blur-md shadow-2xl">
+                      <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/20">
+                        <h2 className="text-sm font-black uppercase tracking-tighter flex items-center gap-2">Analysis Drill-Down</h2>
+                        <div className="relative flex-1 max-w-sm ml-4">
+                          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-600" size={14}/>
+                          <input placeholder="Search Customer ID..." className="w-full bg-black/40 border border-zinc-800 rounded-full py-2.5 pl-10 pr-4 text-xs outline-none focus:ring-1 focus:ring-red-600 transition-all" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto max-h-[600px] scrollbar-hide">
+                        <table className="w-full text-left">
+                          <thead className="sticky top-0 bg-[#0a0a0a] z-10 border-b border-zinc-800">
+                            <tr className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                              <th className="px-8 py-5">Customer ID</th>
+                              <th className="px-6 py-5 text-center">Prob.</th>
+                              <th className="px-6 py-5 text-center">Persona</th>
+                              <th className="px-6 py-5 text-center">Category</th>
+                              <th className="px-6 py-5">Recommendation</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-800/50">
+                            {filteredData.map((row, idx) => (
+                              <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
+                                <td className="px-8 py-5 font-mono text-xs text-red-500 font-bold italic">{row.customer_id.toString().slice(0, 15)}...</td>
+                                <td className="px-6 py-5 text-center font-black text-lg">{row.churn_probability}%</td>
+                                <td className="px-6 py-5 text-center"><span className="px-2 py-1 rounded border border-blue-500/20 bg-blue-500/10 text-[9px] font-black text-blue-400 uppercase whitespace-nowrap inline-flex items-center justify-center w-28">{row.persona}</span></td>
+                                <td className="px-6 py-5 text-center"><span className={`px-3 py-1 rounded text-[9px] font-black uppercase tracking-widest ${row.risk_category === 'High' ? 'bg-red-500/10 text-red-500' : row.risk_category === 'Medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-green-500/10 text-green-500'}`}>{row.risk_category}</span></td>
+                                <td className="px-6 py-5 text-xs text-gray-400 italic leading-relaxed">{row.insight}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-96 border-2 border-dashed border-zinc-800 rounded-[2.5rem] flex flex-col items-center justify-center text-center p-6 bg-zinc-900/10">
+                  <div className="p-6 bg-zinc-900 rounded-full mb-6 border border-zinc-800"><FileText size={40} className="text-zinc-700 animate-pulse"/></div>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest">Inference Engine Standby</h3>
+                  <p className="text-xs text-gray-600 mt-2 max-w-xs italic leading-relaxed">Drag and drop a CSV or Excel batch file to identify at-risk subscriber segments and generate retention strategies.</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div className="mt-16 pt-12 border-t border-zinc-800">
+               <div className="flex items-center justify-between mb-8">
+                 <div><h2 className="text-xl font-black italic text-red-600 tracking-tighter">MODEL BENCHMARK SUITE</h2><p className="text-[10px] text-gray-500 uppercase font-bold tracking-widest mt-1">Cross-Validation Performance Results</p></div>
+                 <div className="px-4 py-2 bg-red-600/10 border border-red-600/30 rounded-full text-[10px] font-black text-red-500 uppercase tracking-widest">Engine: XGBoost</div>
+               </div>
+               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                 {modelStats ? Object.entries(modelStats).map(([key, stats]) => (
+                   <div key={key} className={`p-6 rounded-3xl border transition-all ${key === 'xg' ? 'bg-red-600/5 border-red-500/30 ring-1 ring-red-500/20' : 'bg-zinc-900/40 border-zinc-800'}`}>
+                     <div className="flex justify-between items-center mb-6">
+                       <div className="flex items-center gap-2">
+                         {key === 'xg' ? <Cpu size={14} className="text-red-500"/> : key === 'rf' ? <Layers size={14} className="text-gray-400"/> : <Target size={14} className="text-gray-400"/>}
+                         <span className="text-[10px] font-black uppercase text-gray-400">{key === 'xg' ? 'Extreme Gradient Boosting' : key === 'rf' ? 'Random Forest' : 'Logistic Regression'}</span>
+                       </div>
+                     </div>
+                     <div className="text-4xl font-black mb-6 tracking-tighter">{stats.accuracy}% <span className="text-[8px] text-gray-600 uppercase tracking-widest">Accuracy</span></div>
+                     <div className="space-y-4">{['Precision', 'Recall', 'F1-Score'].map((label, i) => (<div key={label}><div className="flex justify-between text-[8px] font-black uppercase text-gray-600 mb-1"><span>{label}</span><span className="text-gray-100">{Object.values(stats)[i+1]}%</span></div><div className="h-1 bg-zinc-800 rounded-full overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${Object.values(stats)[i+1]}%` }} className={`h-full ${key === 'xg' ? 'bg-red-500' : 'bg-zinc-600'}`} /></div></div>))}</div>
+                   </div>
+                 )) : <div className="col-span-3 text-center text-gray-600 italic">Syncing technical benchmarks...</div>}
+               </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* ===================================================================================== */}
+        {/* PAGE 2: DETAILED DRIFT ANALYSIS (Fixed)                                              */}
+        {/* ===================================================================================== */}
+        {activeTab === 'drift' && (
+           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
+             
+             {/* 1. UPLOAD BAR */}
+             <div className="bg-black border border-zinc-800 rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
+                <div className="flex items-center gap-4 w-full md:w-auto overflow-hidden">
+                    <Activity className="text-yellow-500 shrink-0" size={24} />
+                    <label className="cursor-pointer flex-1">
+                        <span className="block text-sm font-bold text-white hover:text-yellow-500 transition-colors truncate">
+                            {driftFile ? driftFile.name : "Upload Dataset for Drift"}
+                        </span>
+                        <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], true)} accept=".csv, .xlsx" />
+                    </label>
                 </div>
-              </div>
-            )) : <div className="col-span-3 text-center text-gray-600 italic">Syncing technical benchmarks...</div>}
-          </div>
-        </div>
+                <button 
+                  onClick={runDriftAnalysis}
+                  disabled={driftLoading || !driftFile}
+                  className="w-full md:w-auto px-6 py-3 bg-yellow-500 hover:bg-yellow-400 text-black font-black text-xs uppercase tracking-widest rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {driftLoading ? "Running..." : "Analyze Drift"}
+                </button>
+             </div>
+
+             {/* 2. OVERALL STATUS BANNER (Dynamic Color) */}
+             {driftMetrics ? (
+                 <div className={`w-full p-6 rounded-2xl mb-8 border transition-all ${overallDriftStatus === "Severe" ? "bg-red-900/20 border-red-600/50" : "bg-green-900/20 border-green-600/50"}`}>
+                    <h2 className={`text-xl font-black uppercase tracking-tighter ${overallDriftStatus === "Severe" ? "text-red-500" : "text-green-500"}`}>
+                        Overall Drift Status: {overallDriftStatus}
+                    </h2>
+                 </div>
+             ) : (
+                 <div className="h-64 flex flex-col items-center justify-center text-gray-500 border border-zinc-800 rounded-2xl border-dashed bg-zinc-900/20 mb-8">
+                    <p className="text-sm font-bold uppercase tracking-widest">Upload recent data to detect drift</p>
+                 </div>
+             )}
+
+             {/* 3. METRICS GRID (Fail-Safe + Strict Logic) */}
+             {driftMetrics && (
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
+                 {getDriftColumns().map(([feature, v]) => {
+                   
+                   if (typeof v !== 'object' || v === null) return null;
+
+                   // STRICT LOGIC: Force SEVERE if thresholds are met, regardless of backend string
+                   const isSevere = v.psi > 0.25 || v.ks_pvalue < 0.05 || v.js_divergence > 0.10;
+
+                   return (
+                   <div key={feature} className="bg-[#0a0a0a] border border-zinc-800 p-6 rounded-2xl relative overflow-hidden group hover:border-zinc-700 transition-colors">
+                     
+                     {/* Feature Header */}
+                     <div className="flex justify-between items-start mb-6">
+                       <h3 className="text-xl font-bold text-white tracking-tight">{feature}</h3>
+                       <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded ${
+                         isSevere ? "text-red-500" : "text-green-500"
+                       }`}>
+                         {isSevere ? "Severe" : "Normal"}
+                       </span>
+                     </div>
+
+                     {/* Metrics Rows */}
+                     <div className="space-y-4 text-sm font-mono">
+                        
+                        {/* PSI Row */}
+                        <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
+                            <span className="text-gray-400 font-bold text-xs">PSI (Population Stability)</span>
+                            <div className="text-right">
+                                <span className="text-[10px] text-gray-600 mr-2 uppercase tracking-wide">Recommended &lt; 0.25 |</span>
+                                <span className={`font-black ${v?.psi > 0.25 ? 'text-red-500' : 'text-white'}`}>
+                                  {v?.psi !== undefined ? v.psi.toFixed(3) : "N/A"}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* KS Row */}
+                        <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
+                            <span className="text-gray-400 font-bold text-xs">KS Test (p-value)</span>
+                            <div className="text-right">
+                                <span className="text-[10px] text-gray-600 mr-2 uppercase tracking-wide">Recommended &gt; 0.05 |</span>
+                                <span className={`font-black ${v?.ks_pvalue < 0.05 ? 'text-red-500' : 'text-white'}`}>
+                                  {v?.ks_pvalue !== undefined ? v.ks_pvalue.toFixed(3) : "N/A"}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* JS Row */}
+                        <div className="flex justify-between items-center">
+                            <span className="text-gray-400 font-bold text-xs">JS Divergence</span>
+                            <div className="text-right">
+                                <span className="text-[10px] text-gray-600 mr-2 uppercase tracking-wide">Recommended &lt; 0.10 |</span>
+                                <span className={`font-black ${v?.js_divergence > 0.10 ? 'text-red-500' : 'text-white'}`}>
+                                  {v?.js_divergence !== undefined ? v.js_divergence.toFixed(3) : "N/A"}
+                                </span>
+                            </div>
+                        </div>
+
+                     </div>
+                   </div>
+                 )})}
+               </div>
+             )}
+           </motion.div>
+        )}
+
       </div>
     </div>
   );

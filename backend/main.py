@@ -7,9 +7,18 @@ import io
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
+import time 
 
-# Load environment variables from .env file in root directory
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+# --- MERGE: Import Drift Detector ---
+try:
+    # Attempt to import from the local drift folder
+    from drift.drift_detector import DriftDetector
+except ImportError:
+    print("⚠️ Warning: 'drift' module not found. Ensure 'drift' folder is in 'backend'.")
+    DriftDetector = None
+
+# --- CRITICAL FIX: Load .env from the CURRENT directory (backend) ---
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 app = FastAPI(title="OTT Churn Batch Engine")
 
@@ -20,21 +29,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load API key from environment variables
+# Load API key
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found in environment variables. Please set it in .env file.")
+    # Only raise error if key is missing, but print help message first
+    print("❌ ERROR: GOOGLE_API_KEY is missing. Check your .env file.")
+    raise ValueError("GOOGLE_API_KEY not found in environment variables.")
 
-# Configure the AI
+# Configure AI
 genai.configure(api_key=GOOGLE_API_KEY)
 model = None
 
-# --- NEW: AUTO-DETECT WORKING MODEL ---
+# --- AUTO-DETECT WORKING MODEL ---
 def get_best_available_model():
-    """
-    Scans the user's API key to find a working model.
-    Prioritizes: Gemini 1.5 Flash -> 1.5 Pro -> 1.0 Pro
-    """
     try:
         print("🔍 Scanning for available Gemini models...")
         available_models = []
@@ -42,32 +49,25 @@ def get_best_available_model():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
         
-        # Priority List
         priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-        
         for p in priorities:
             if p in available_models:
                 print(f"✅ Found Optimal Model: {p}")
                 return genai.GenerativeModel(p)
         
-        # Fallback: Just take the first one available
         if available_models:
             print(f"⚠️ Using Fallback Model: {available_models[0]}")
             return genai.GenerativeModel(available_models[0])
-            
-        print("❌ No text generation models found for this API key.")
         return None
-        
     except Exception as e:
         print(f"⚠️ Model Auto-Detect Failed: {e}")
         return None
 
-# Initialize Model using the Auto-Detector
 model = get_best_available_model()
 
+# --- MODEL LOADING ---
 models = {}
 MODEL_DIR = "models" 
-
 MODEL_METRICS = {
     "xg": {"accuracy": 94.2, "precision": 92.1, "recall": 91.5, "f1": 91.8},
     "rf": {"accuracy": 89.5, "precision": 87.4, "recall": 86.2, "f1": 86.8},
@@ -76,6 +76,11 @@ MODEL_METRICS = {
 
 def load_local_models():
     try:
+        # Ensure directory exists before loading
+        if not os.path.exists(MODEL_DIR):
+            print(f"⚠️ Warning: Model directory '{MODEL_DIR}' not found.")
+            return
+
         models['xg'] = pickle.load(open(f"{MODEL_DIR}/xg_boosting_model.pkl", "rb"))
         models['rf'] = pickle.load(open(f"{MODEL_DIR}/random_forest_model.pkl", "rb"))
         models['lr'] = pickle.load(open(f"{MODEL_DIR}/logistic_regression_model.pkl", "rb"))
@@ -85,7 +90,31 @@ def load_local_models():
 
 load_local_models()
 
-def calculate_drift(df):
+# --- MERGE: DRIFT DETECTOR INITIALIZATION ---
+drift_detector = None
+baseline_df = None
+
+try:
+    base_path = os.path.join(os.path.dirname(__file__), "data", "baseline.csv")
+    
+    if os.path.exists(base_path):
+        baseline_df = pd.read_csv(base_path)
+        if DriftDetector:
+            drift_detector = DriftDetector()
+            print("✅ Drift Detector & Baseline Loaded Successfully.")
+    else:
+        # Create data directory if it doesn't exist
+        os.makedirs(os.path.join(os.path.dirname(__file__), "data"), exist_ok=True)
+        print(f"⚠️ Drift Warning: 'baseline.csv' not found at {base_path}")
+        
+except Exception as e:
+    print(f"⚠️ Drift Initialization Failed: {e}")
+
+
+# --- EXISTING FUNCTIONS ---
+
+def calculate_drift_simple(df):
+    """Simple drift calculation for the summary card"""
     baselines = {'watch_hours': 22.0, 'last_login_days': 4.0}
     drift_flags = []
     for feature, base_mean in baselines.items():
@@ -96,43 +125,30 @@ def calculate_drift(df):
             elif shift > 0.2: drift_flags.append("Moderate")
     return "High" if "High" in drift_flags else "Moderate" if "Moderate" in drift_flags else "Low"
 
-# --- SMART HYBRID GENERATOR ---
 ai_call_counter = 0
 
 def generate_smart_insight(row):
     global ai_call_counter
-    
     risk = row['churn_probability']
     
-    # Standard Rule-Based Fallback
-    if risk > 75:
-        fallback = "Critical: Reactivation Phone Call + 50% Win-back Offer"
-    elif risk > 40:
-        fallback = f"Medium: Send targeted email for {row['favorite_genre']} content."
-    else:
-        fallback = "Healthy: Include in monthly newsletter."
+    if risk > 75: fallback = "Critical: Reactivation Phone Call + 50% Win-back Offer"
+    elif risk > 40: fallback = f"Medium: Send targeted email for {row['favorite_genre']} content."
+    else: fallback = "Healthy: Include in monthly newsletter."
 
-    # --- AI EXECUTION LOGIC ---
-    # Only run AI if High Risk AND counter < 5 AND model is loaded
+    # Safety check: Only run AI if High Risk, Counter < 5, and Model exists
     if risk > 75 and ai_call_counter < 5 and model:
         try:
             ai_call_counter += 1 
-            
             prompt = (
                 f"Customer Data: Risk {risk}%, Watch Hours {row['watch_hours']}, "
                 f"Genre {row['favorite_genre']}, Inactive {row['last_login_days']} days. "
                 f"Act as a retention expert. Write a strictly 1-sentence specific marketing action."
             )
-
-            # Use the auto-detected model
             response = model.generate_content(prompt)
-            
             return "✨ AI: " + response.text.strip()
-            
         except Exception as e:
             print(f"Gemini API Error: {e}")
             return fallback
-            
     return fallback
 
 @app.get("/")
@@ -142,6 +158,29 @@ def health():
 @app.get("/model-stats")
 def get_model_stats():
     return MODEL_METRICS
+
+# --- MERGE: NEW DRIFT ENDPOINT ---
+@app.post("/drift/analyze")
+async def analyze_drift(file: UploadFile = File(...)):
+    if not drift_detector or baseline_df is None:
+        # Return a soft error so frontend doesn't crash, just shows empty drift
+        print("Drift Analysis requested but detector is offline.")
+        raise HTTPException(status_code=503, detail="Drift Detector not initialized.")
+    
+    try:
+        contents = await file.read()
+        recent_df = pd.read_csv(io.BytesIO(contents)) if file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(contents))
+
+        drift_result = drift_detector.detect_drift(
+            baseline_df=baseline_df,
+            recent_df=recent_df
+        )
+        return drift_result
+        
+    except Exception as e:
+        print(f"Drift Analysis Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/predict-batch")
 async def predict_batch(file: UploadFile = File(...)):
@@ -159,6 +198,9 @@ async def predict_batch(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
+        # Reset file cursor before reading again (important if file was read by drift endpoint)
+        await file.seek(0)
+        
         df = pd.read_csv(io.BytesIO(contents)) if file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(contents))
         
         missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
@@ -188,9 +230,13 @@ async def predict_batch(file: UploadFile = File(...)):
         ]
         features_df = df[TRAINING_FEATURES]
         
+        # Check if model is loaded before predicting
+        if 'xg' not in models:
+            raise HTTPException(status_code=500, detail="Prediction models not loaded. Check server logs.")
+
         raw_probs = models['xg'].predict_proba(features_df)[:, 1]
 
-        # 3. Uncertainty Regularization (3-96%)
+        # 3. Uncertainty Regularization
         final_probs = (raw_probs * 0.93) + 0.03
         noise = np.random.uniform(-0.015, 0.015, size=final_probs.shape)
         final_probs = np.clip(final_probs + noise, 0.01, 0.99)
@@ -203,7 +249,12 @@ async def predict_batch(file: UploadFile = File(...)):
 
         # 5. Hybrid AI Generation
         print("🧠 Generating Hybrid Strategies...")
-        df['insight'] = df.apply(generate_smart_insight, axis=1)
+        for index, row in df.iterrows():
+            if row['churn_probability'] > 75 and ai_call_counter < 5:
+                df.at[index, 'insight'] = generate_smart_insight(row)
+                time.sleep(2) # Safety delay for API limits
+            else:
+                df.at[index, 'insight'] = generate_smart_insight(row)
 
         # 6. KPI Summary
         high_risk_df = df[df['risk_category'] == 'High']
@@ -217,19 +268,28 @@ async def predict_batch(file: UploadFile = File(...)):
             "medium_risk_count": int(len(medium_risk_df)),
             "low_risk_count": int(len(low_risk_df)),
             "revenue_at_risk": round(float(high_risk_df['monthly_fee'].sum()), 2),
-            "drift_level": calculate_drift(df),
+            "drift_level": calculate_drift_simple(df),
             "top_churn_genre": str(high_risk_df['favorite_genre'].mode()[0]) if not high_risk_df.empty else "N/A",
             "churner_avg_watch": round(float(high_risk_df['watch_hours'].mean()), 1) if not high_risk_df.empty else 0.0
         }
 
         results_list = []
-        for _, row in df[['customer_id', 'churn_probability', 'risk_category', 'insight', 'persona']].iterrows():
+        for _, row in df.iterrows():
             results_list.append({
                 'customer_id': str(row['customer_id']),
                 'churn_probability': float(row['churn_probability']),
                 'risk_category': str(row['risk_category']),
-                'insight': str(row['insight']),
-                'persona': str(row['persona'])
+                'insight': str(row.get('insight', 'No insight')),
+                'persona': str(row['persona']),
+                
+                # Full details for Customer Modal
+                'age': int(row.get('age', 0)),
+                'gender': str(row.get('gender', 'N/A')),
+                'location': str(row.get('region', 'Unknown')),
+                'watch_hours': float(row.get('watch_hours', 0.0)),
+                'last_login': int(row.get('last_login_days', 0)),
+                'favorite_genre': str(row.get('favorite_genre', 'N/A')),
+                'monthly_fee': float(row.get('monthly_fee', 0.0))
             })
 
         return {"summary": summary, "data": results_list}
