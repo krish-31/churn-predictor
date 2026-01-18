@@ -7,7 +7,10 @@ import io
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
-import time 
+import time
+import json
+import plotly.express as px
+import plotly.utils
 
 # --- MERGE: Import Drift Detector ---
 try:
@@ -34,14 +37,16 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     # Only raise error if key is missing, but print help message first
     print("❌ ERROR: GOOGLE_API_KEY is missing. Check your .env file.")
-    raise ValueError("GOOGLE_API_KEY not found in environment variables.")
+    # We don't raise error here to allow server to start, but AI features will fail gracefully
 
 # Configure AI
-genai.configure(api_key=GOOGLE_API_KEY)
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
 model = None
 
 # --- AUTO-DETECT WORKING MODEL ---
 def get_best_available_model():
+    if not GOOGLE_API_KEY: return None
     try:
         print("🔍 Scanning for available Gemini models...")
         available_models = []
@@ -158,6 +163,137 @@ def health():
 @app.get("/model-stats")
 def get_model_stats():
     return MODEL_METRICS
+
+# ==========================================
+# 📊 NEW ENDPOINT: STATS / EDA (BLUE THEME)
+# ==========================================
+@app.post("/stats/analyze")
+async def analyze_stats(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        # Reset cursor just in case
+        await file.seek(0)
+        df = pd.read_csv(io.BytesIO(contents)) if file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(contents))
+        
+        # 1. Dataset Overview
+        summary = {
+            'rows': df.shape[0],
+            'cols': df.shape[1],
+            'missing': int(df.isnull().sum().sum()),
+            'duplicates': int(df.duplicated().sum()),
+        }
+
+        # 2. Identify Column Types
+        num_cols = df.select_dtypes(include=['number']).columns.tolist()
+        cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        churn_col = next((c for c in df.columns if 'churn' in c.lower()), None)
+
+        charts = {'categorical': [], 'numerical': [], 'correlation': None, 'bivariate': []}
+        
+        # Custom "Blue Shades" Palette for visual variety
+        blue_gradients = ['#1E3A8A', '#1D4ED8', '#2563EB', '#3B82F6', '#60A5FA', '#93C5FD']
+
+        # --- A. CATEGORICAL: Smart Selection (Donut vs Bar) ---
+        for col in cat_cols:
+            # SKIP ID COLUMNS
+            if 'id' in col.lower() or 'email' in col.lower():
+                continue
+
+            unique_count = df[col].nunique()
+            if unique_count < 15:
+                counts = df[col].value_counts().reset_index()
+                counts.columns = [col, 'Count']
+                
+                # If few categories, use a DONUT CHART (Cleaner look)
+                if unique_count <= 5:
+                    fig = px.pie(counts, names=col, values='Count', hole=0.6, 
+                                 title=f"<b>{col.replace('_',' ').title()}</b> Composition",
+                                 color_discrete_sequence=blue_gradients)
+                    fig.update_traces(textinfo='percent+label', textfont_size=14)
+                else:
+                    # If many categories, use a BAR CHART
+                    fig = px.bar(counts, x=col, y='Count', 
+                                 title=f"<b>{col.replace('_',' ').title()}</b> Distribution",
+                                 color='Count', # Gradient coloring based on count
+                                 color_continuous_scale='Blues') 
+                
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(0,0,0,0)', 
+                    font_color='#E0E7FF',
+                    margin=dict(t=50, l=20, r=20, b=40),
+                    showlegend=True,
+                    coloraxis_showscale=False # Hide color bar for cleaner look
+                )
+                charts['categorical'].append(json.loads(json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)))
+
+        # --- B. NUMERICAL: Histograms with KDE look ---
+        for i, col in enumerate(num_cols):
+            # Skip ID columns or tiny variance columns
+            if 'id' in col.lower() or df[col].nunique() < 5:
+                continue
+
+            # Alternate colors for visual separation
+            chart_color = blue_gradients[i % len(blue_gradients)]
+
+            fig = px.histogram(df, x=col, title=f"<b>{col.replace('_',' ').title()}</b> Spread",
+                               color_discrete_sequence=[chart_color], nbins=40, opacity=0.8)
+            
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)', 
+                plot_bgcolor='rgba(0,0,0,0)', 
+                font_color='#E0E7FF',
+                margin=dict(t=50, l=40, r=20, b=40),
+                bargap=0.05
+            )
+            # Add a subtle grid
+            fig.update_xaxes(showgrid=False)
+            fig.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.1)')
+            
+            charts['numerical'].append(json.loads(json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)))
+
+        # --- C. CORRELATION (HUGE MAP) ---
+        if len(num_cols) > 1:
+            # Filter IDs from correlation too
+            valid_corr_cols = [c for c in num_cols if 'id' not in c.lower()]
+            if len(valid_corr_cols) > 1:
+                corr = df[valid_corr_cols].corr()
+                fig_corr = px.imshow(corr, text_auto=".2f", aspect="auto",
+                                     color_continuous_scale='Blues',
+                                     title="<b>Feature Correlation Heatmap</b>")
+                fig_corr.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(0,0,0,0)', 
+                    font_color='#E0E7FF',
+                    height=800,  # FORCE HUGE HEIGHT
+                    margin=dict(t=60, l=40, r=40, b=40)
+                )
+                charts['correlation'] = json.loads(json.dumps(fig_corr, cls=plotly.utils.PlotlyJSONEncoder))
+
+        # --- D. BIVARIATE (Box Plots for nice separation) ---
+        if churn_col:
+            for col in num_cols:
+                if 'id' in col.lower() or col == churn_col: continue
+
+                fig = px.box(df, x=churn_col, y=col, color=churn_col,
+                             title=f"<b>{col.replace('_',' ').title()}</b> by Churn",
+                             color_discrete_map={0: '#60A5FA', 1: '#1E40AF', 'No': '#60A5FA', 'Yes': '#1E40AF'})
+                
+                fig.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', 
+                    plot_bgcolor='rgba(0,0,0,0)', 
+                    font_color='#E0E7FF',
+                    showlegend=False,
+                    margin=dict(t=50, l=40, r=20, b=40)
+                )
+                charts['bivariate'].append(json.loads(json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)))
+
+        return {"summary": summary, "charts": charts}
+
+    except Exception as e:
+        print(f"Stats Analysis Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # --- MERGE: NEW DRIFT ENDPOINT ---
 @app.post("/drift/analyze")

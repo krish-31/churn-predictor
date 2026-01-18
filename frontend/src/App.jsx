@@ -1,26 +1,34 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import axios from 'axios';
+import Plot from 'react-plotly.js';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Upload, FileText, BarChart3, Users, 
   AlertTriangle, DollarSign, Search, CheckCircle2,
   ChevronRight, Play, RefreshCcw, TrendingDown,
-  Activity, Target, Cpu, Layers, FileCode2
+  Activity, Target, Cpu, Layers, FileCode2, PieChart
 } from 'lucide-react';
 
 const App = () => {
   // --- STATE MANAGEMENT ---
-  const [activeTab, setActiveTab] = useState('churn'); 
+  const [activeTab, setActiveTab] = useState('churn'); // 'churn' | 'drift' | 'stats'
+  
+  // Files
   const [file, setFile] = useState(null);
   const [driftFile, setDriftFile] = useState(null); 
+  const [statsFile, setStatsFile] = useState(null); 
 
+  // Data Response
   const [data, setData] = useState(null); 
   const [summary, setSummary] = useState(null);
   const [driftMetrics, setDriftMetrics] = useState(null); 
+  const [statsData, setStatsData] = useState(null); 
   const [overallDriftStatus, setOverallDriftStatus] = useState("Unknown");
 
+  // Loading States
   const [loading, setLoading] = useState(false); 
   const [driftLoading, setDriftLoading] = useState(false); 
+  const [statsLoading, setStatsLoading] = useState(false); 
 
   const [searchTerm, setSearchTerm] = useState("");
   const [backendHealth, setBackendHealth] = useState(false);
@@ -54,12 +62,13 @@ const App = () => {
   }, []);
 
   // --- HANDLERS ---
-  const validateAndSetFile = (selectedFile, isDrift = false) => {
+  const validateAndSetFile = (selectedFile, type = 'churn') => {
     const fileName = selectedFile?.name || "";
     const isValid = fileName.endsWith('.csv') || fileName.endsWith('.xlsx');
 
     if (selectedFile && isValid) {
-      if (isDrift) setDriftFile(selectedFile);
+      if (type === 'drift' || type === true) setDriftFile(selectedFile);
+      else if (type === 'stats') setStatsFile(selectedFile);
       else setFile(selectedFile);
     } else {
       alert("Please select a valid CSV or Excel (.xlsx) file.");
@@ -69,11 +78,11 @@ const App = () => {
   const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
   const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
   
-  const handleDrop = (e, isDrift = false) => {
+  const handleDrop = (e, type = 'churn') => {
     e.preventDefault();
     setIsDragging(false);
     const droppedFile = e.dataTransfer.files[0];
-    validateAndSetFile(droppedFile, isDrift);
+    validateAndSetFile(droppedFile, type);
   };
 
   // --- 1. RUN PREDICTION ---
@@ -97,7 +106,7 @@ const App = () => {
     }
   };
 
-  // --- 2. RUN DRIFT ANALYSIS (With STRICT Threshold Check) ---
+  // --- 2. RUN DRIFT ANALYSIS ---
   const runDriftAnalysis = async () => {
     if (!driftFile) return alert("Please upload a dataset for drift analysis.");
     setDriftLoading(true);
@@ -114,14 +123,11 @@ const App = () => {
       const metrics = response.data;
       setDriftMetrics(metrics);
 
-      // Unwrap nested data if necessary
       const actualData = metrics.features || metrics.drift_metrics || metrics;
       
-      // STRICT CHECK: Determine Overall Status based on VALUES, not just labels
       let isSevere = false;
       if (actualData && typeof actualData === 'object') {
         Object.values(actualData).forEach(m => {
-          // If ANY metric exceeds the safe threshold, flag as Severe
           if (m?.psi > 0.25 || m?.ks_pvalue < 0.05 || m?.js_divergence > 0.10) {
             isSevere = true;
           }
@@ -131,10 +137,29 @@ const App = () => {
 
     } catch (err) {
       console.error("Drift Error:", err);
-      alert("⚠️ DRIFT ERROR: Check backend logs or ensure baseline.csv is correct.");
+      alert("⚠️ DRIFT ERROR: Check backend logs.");
     } finally {
       setDriftLoading(false);
     }
+  };
+
+  // --- 3. RUN STATS ANALYSIS ---
+  const runStatsAnalysis = async () => {
+    if (!statsFile) return alert("Please upload a dataset.");
+    setStatsLoading(true);
+    setStatsData(null);
+    const formData = new FormData();
+    formData.append('file', statsFile);
+    try {
+      const response = await axios.post('http://127.0.0.1:8000/stats/analyze', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setStatsData(response.data);
+    } catch (err) { 
+      console.error(err);
+      alert("⚠️ STATS ERROR: Check backend logs."); 
+    } 
+    finally { setStatsLoading(false); }
   };
 
   // --- HELPER: Extract Columns ---
@@ -158,7 +183,7 @@ const App = () => {
       <motion.div 
         animate={{ opacity: [0.1, 0.2, 0.1], scale: [1, 1.05, 1] }}
         transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-        className="fixed inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-red-900/20 via-black to-black -z-10"
+        className="fixed inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-zinc-900/40 via-black to-black -z-10"
       />
 
       <div className="max-w-7xl mx-auto px-6 py-12">
@@ -166,14 +191,14 @@ const App = () => {
         {/* --- HEADER --- */}
         <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-4">
           <div className="flex-1">
-            <h1 className="text-5xl font-black text-red-600 italic tracking-tighter">RETENTION HQ</h1>
+            <h1 className="text-5xl font-black text-white italic tracking-tighter">RETENTION <span className="text-red-600">HQ</span></h1>
             <p className="text-gray-500 font-medium uppercase tracking-[0.25em] text-[10px] mt-2">Enterprise ML Intelligence Console</p>
           </div>
 
           <div className="flex bg-zinc-900/80 p-1 rounded-full border border-zinc-800">
             <button 
               onClick={() => setActiveTab('churn')}
-              className={`px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'churn' ? 'bg-zinc-800 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+              className={`px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'churn' ? 'bg-red-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
             >
               Churn Engine
             </button>
@@ -183,12 +208,18 @@ const App = () => {
             >
               Drift Detection
             </button>
+            <button 
+              onClick={() => setActiveTab('stats')}
+              className={`px-6 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'stats' ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+              Analytics
+            </button>
           </div>
 
           <div className="flex-1 text-right">
              <div className={`inline-flex items-center gap-2 text-xs font-bold ${backendHealth ? 'text-green-500' : 'text-red-500'}`}>
               <div className={`w-2 h-2 rounded-full animate-pulse ${backendHealth ? 'bg-green-500' : 'bg-red-500'}`} /> 
-              {backendHealth ? 'ML Engine Active' : 'ML Engine Offline'}
+              {backendHealth ? 'System Active' : 'System Offline'}
             </div>
           </div>
         </header>
@@ -199,10 +230,12 @@ const App = () => {
         {activeTab === 'churn' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-12">
+              
+              {/* CHURN UPLOAD BAR (RED THEME) */}
               <div 
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, false)}
+                onDrop={(e) => handleDrop(e, 'churn')}
                 className={`lg:col-span-3 bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 ${isDragging ? 'border-red-600 bg-red-600/5 scale-[1.01]' : 'border-zinc-800'}`}
               >
                 <div className="flex-1 w-full">
@@ -216,7 +249,7 @@ const App = () => {
                       </p>
                       <p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p>
                     </div>
-                    <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], false)} accept=".csv, .xlsx" />
+                    <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'churn')} accept=".csv, .xlsx" />
                   </label>
                 </div>
                 
@@ -361,29 +394,40 @@ const App = () => {
         )}
 
         {/* ===================================================================================== */}
-        {/* PAGE 2: DETAILED DRIFT ANALYSIS (Fixed)                                              */}
+        {/* PAGE 2: DRIFT DETECTION (YELLOW)                                                     */}
         {/* ===================================================================================== */}
         {activeTab === 'drift' && (
            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
              
-             {/* 1. UPLOAD BAR */}
-             <div className="bg-black border border-zinc-800 rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 mb-8">
-                <div className="flex items-center gap-4 w-full md:w-auto overflow-hidden">
-                    <Activity className="text-yellow-500 shrink-0" size={24} />
-                    <label className="cursor-pointer flex-1">
-                        <span className="block text-sm font-bold text-white hover:text-yellow-500 transition-colors truncate">
-                            {driftFile ? driftFile.name : "Upload Dataset for Drift"}
-                        </span>
-                        <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], true)} accept=".csv, .xlsx" />
-                    </label>
-                </div>
-                <button 
-                  onClick={runDriftAnalysis}
-                  disabled={driftLoading || !driftFile}
-                  className="w-full md:w-auto px-6 py-3 bg-yellow-500 hover:bg-yellow-400 text-black font-black text-xs uppercase tracking-widest rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {driftLoading ? "Running..." : "Analyze Drift"}
-                </button>
+             {/* DRIFT UPLOAD BAR (YELLOW THEME - COPIED FROM CHURN) */}
+             <div 
+               onDragOver={handleDragOver}
+               onDragLeave={handleDragLeave}
+               onDrop={(e) => handleDrop(e, 'drift')}
+               className={`w-full bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 mb-8 ${isDragging ? 'border-yellow-500 bg-yellow-500/5 scale-[1.01]' : 'border-zinc-800'}`}
+             >
+               <div className="flex-1 w-full">
+                 <label className="flex items-center gap-4 cursor-pointer group">
+                   <div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-yellow-500 text-black border-yellow-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-yellow-500/50 group-hover:text-yellow-500'}`}>
+                     <Activity size={24} className={isDragging ? 'animate-bounce' : ''} />
+                   </div>
+                   <div>
+                     <p className="text-sm font-bold text-gray-200">
+                       {driftFile ? driftFile.name : isDragging ? "Drop File Here" : "Upload Recent Dataset for Drift Analysis"}
+                     </p>
+                     <p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p>
+                   </div>
+                   <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'drift')} accept=".csv, .xlsx" />
+                 </label>
+               </div>
+               
+               <button 
+                 onClick={runDriftAnalysis}
+                 disabled={driftLoading || !driftFile}
+                 className="px-8 py-4 bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-gray-500 text-black rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 active:scale-95 shadow-lg shadow-yellow-500/20"
+               >
+                 {driftLoading ? <RefreshCcw className="animate-spin" size={18}/> : "Analyze Drift"}
+               </button>
              </div>
 
              {/* 2. OVERALL STATUS BANNER (Dynamic Color) */}
@@ -406,13 +450,11 @@ const App = () => {
                    
                    if (typeof v !== 'object' || v === null) return null;
 
-                   // STRICT LOGIC: Force SEVERE if thresholds are met, regardless of backend string
                    const isSevere = v.psi > 0.25 || v.ks_pvalue < 0.05 || v.js_divergence > 0.10;
 
                    return (
                    <div key={feature} className="bg-[#0a0a0a] border border-zinc-800 p-6 rounded-2xl relative overflow-hidden group hover:border-zinc-700 transition-colors">
                      
-                     {/* Feature Header */}
                      <div className="flex justify-between items-start mb-6">
                        <h3 className="text-xl font-bold text-white tracking-tight">{feature}</h3>
                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded ${
@@ -422,10 +464,7 @@ const App = () => {
                        </span>
                      </div>
 
-                     {/* Metrics Rows */}
                      <div className="space-y-4 text-sm font-mono">
-                        
-                        {/* PSI Row */}
                         <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
                             <span className="text-gray-400 font-bold text-xs">PSI (Population Stability)</span>
                             <div className="text-right">
@@ -436,7 +475,6 @@ const App = () => {
                             </div>
                         </div>
 
-                        {/* KS Row */}
                         <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
                             <span className="text-gray-400 font-bold text-xs">KS Test (p-value)</span>
                             <div className="text-right">
@@ -447,7 +485,6 @@ const App = () => {
                             </div>
                         </div>
 
-                        {/* JS Row */}
                         <div className="flex justify-between items-center">
                             <span className="text-gray-400 font-bold text-xs">JS Divergence</span>
                             <div className="text-right">
@@ -457,13 +494,173 @@ const App = () => {
                                 </span>
                             </div>
                         </div>
-
                      </div>
                    </div>
                  )})}
                </div>
              )}
            </motion.div>
+        )}
+
+        {/* ===================================================================================== */}
+        {/* PAGE 3: STATS ANALYTICS (BLUE)                                                       */}
+        {/* ===================================================================================== */}
+        {activeTab === 'stats' && (
+          <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="space-y-12">
+            
+            {/* STATS UPLOAD BAR (BLUE THEME - COPIED FROM CHURN) */}
+            <div 
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, 'stats')}
+                className={`w-full bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 ${isDragging ? 'border-blue-600 bg-blue-600/5 scale-[1.01]' : 'border-zinc-800'}`}
+              >
+                <div className="flex-1 w-full">
+                  <label className="flex items-center gap-4 cursor-pointer group">
+                    <div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-blue-600 text-white border-blue-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-blue-500/50 group-hover:text-blue-500'}`}>
+                      <PieChart size={24} className={isDragging ? 'animate-bounce' : ''} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-gray-200">
+                        {statsFile ? statsFile.name : isDragging ? "Drop File Here" : "Upload Dataset for Analysis"}
+                      </p>
+                      <p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p>
+                    </div>
+                    <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'stats')} accept=".csv, .xlsx" />
+                  </label>
+                </div>
+                
+                <button 
+                  onClick={runStatsAnalysis}
+                  disabled={statsLoading || !statsFile}
+                  className="px-8 py-4 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-gray-500 text-white rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 active:scale-95 shadow-lg shadow-blue-600/20"
+                >
+                  {statsLoading ? "Processing..." : "Visualize Data"}
+                </button>
+              </div>
+
+             {/* 2. DASHBOARD CONTENT */}
+             <AnimatePresence>
+               {statsData && (
+                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-12">
+                    
+                    {/* A. KEY METRICS ROW */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                       {[
+                         { label: 'Total Rows', val: statsData.summary.rows, icon: Layers },
+                         { label: 'Columns', val: statsData.summary.cols, icon: FileCode2 },
+                         { label: 'Missing Values', val: statsData.summary.missing, icon: AlertTriangle },
+                         { label: 'Duplicates', val: statsData.summary.duplicates, icon: Users }
+                       ].map((item, i) => (
+                         <div key={i} className="bg-[#0A0A0A] border border-zinc-800 p-6 rounded-3xl flex items-center gap-6 hover:border-blue-500/30 transition-colors">
+                           <div className="p-4 bg-blue-900/10 rounded-2xl text-blue-500"><item.icon size={24}/></div>
+                           <div>
+                             <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{item.label}</div>
+                             <div className="text-3xl font-black text-white">{item.val}</div>
+                           </div>
+                         </div>
+                       ))}
+                    </div>
+
+                    {/* B. CATEGORICAL (BIGGER CHARTS - 2 Per Row) */}
+                    {statsData.charts.categorical.length > 0 && (
+                        <div>
+                            <h3 className="text-sm font-black text-blue-400 uppercase tracking-widest mb-6 flex items-center gap-2 pl-2">
+                                <span className="w-1.5 h-6 bg-blue-500 rounded-full"></span> Categorical Breakdown
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {statsData.charts.categorical.map((chartJSON, idx) => (
+                                    <div key={idx} className="bg-zinc-900/30 border border-zinc-800/50 rounded-[2rem] p-6 overflow-hidden hover:border-blue-500/20 transition-all">
+                                        <Plot
+                                            data={chartJSON.data}
+                                            layout={{...chartJSON.layout, autosize: true, height: 350}}
+                                            style={{ width: '100%', height: '100%' }}
+                                            config={{ displayModeBar: false }}
+                                            useResizeHandler={true}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* C. NUMERICAL (BIGGER CHARTS - 2 Per Row) */}
+                    {statsData.charts.numerical.length > 0 && (
+                        <div>
+                            <h3 className="text-sm font-black text-blue-400 uppercase tracking-widest mb-6 flex items-center gap-2 pl-2">
+                                <span className="w-1.5 h-6 bg-blue-500 rounded-full"></span> Distribution Analysis
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {statsData.charts.numerical.map((chartJSON, idx) => (
+                                    <div key={idx} className="bg-zinc-900/30 border border-zinc-800/50 rounded-[2rem] p-6 hover:border-blue-500/20 transition-all">
+                                        <Plot
+                                            data={chartJSON.data}
+                                            layout={{...chartJSON.layout, autosize: true, height: 350}}
+                                            style={{ width: '100%', height: '100%' }}
+                                            config={{ displayModeBar: false }}
+                                            useResizeHandler={true}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* D. CHURN ANALYSIS (Violin Plots) */}
+                    {statsData.charts.bivariate.length > 0 && (
+                        <div>
+                            <h3 className="text-sm font-black text-blue-400 uppercase tracking-widest mb-6 flex items-center gap-2 pl-2">
+                                <span className="w-1.5 h-6 bg-blue-500 rounded-full"></span> Churn Impact
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {statsData.charts.bivariate.map((chartJSON, idx) => (
+                                    <div key={idx} className="bg-blue-900/5 border border-blue-500/20 rounded-[2rem] p-6">
+                                        <Plot
+                                            data={chartJSON.data}
+                                            layout={{...chartJSON.layout, autosize: true, height: 350}}
+                                            style={{ width: '100%', height: '100%' }}
+                                            config={{ displayModeBar: false }}
+                                            useResizeHandler={true}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* E. CORRELATION (HUGE FULL WIDTH) */}
+                    {statsData.charts.correlation && (
+                        <div className="pb-12">
+                            <h3 className="text-sm font-black text-blue-400 uppercase tracking-widest mb-6 flex items-center gap-2 pl-2">
+                                <span className="w-1.5 h-6 bg-blue-500 rounded-full"></span> Feature Correlation Matrix
+                            </h3>
+                            <div className="bg-zinc-900/50 border border-zinc-800/80 rounded-[2.5rem] p-4 shadow-2xl">
+                                <Plot
+                                    data={statsData.charts.correlation.data}
+                                    layout={{...statsData.charts.correlation.layout, autosize: true}}
+                                    style={{ width: '100%', height: '800px' }} // HARDCODED HUGE HEIGHT
+                                    config={{ displayModeBar: false }}
+                                    useResizeHandler={true}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                 </motion.div>
+               )}
+             </AnimatePresence>
+
+             {/* EMPTY STATE */}
+             {!statsData && !statsLoading && (
+               <div className="h-96 flex flex-col items-center justify-center border border-dashed border-blue-900/30 rounded-[3rem] bg-blue-900/5">
+                 <div className="p-6 bg-blue-900/10 rounded-full mb-4">
+                    <BarChart3 size={40} className="text-blue-500/50" />
+                 </div>
+                 <h3 className="text-lg font-bold text-blue-200">Ready for Analysis</h3>
+                 <p className="text-xs text-blue-400/60 uppercase tracking-widest mt-2">Upload a dataset to generate insights</p>
+               </div>
+             )}
+          </motion.div>
         )}
 
       </div>
