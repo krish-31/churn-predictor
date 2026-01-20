@@ -125,15 +125,29 @@ const App = () => {
 
       const actualData = metrics.features || metrics.drift_metrics || metrics;
       
-      let isSevere = false;
+      let highCount = 0;
+      let moderateCount = 0;
+
       if (actualData && typeof actualData === 'object') {
         Object.values(actualData).forEach(m => {
-          if (m?.psi > 0.25 || m?.ks_pvalue < 0.05 || m?.js_divergence > 0.10) {
-            isSevere = true;
-          }
+            if (m?.psi > 0.25) {
+                highCount++;
+            } 
+            else if (m?.psi > 0.1 || m?.js_divergence > 0.1) {
+                moderateCount++;
+            }
         });
       }
-      setOverallDriftStatus(isSevere ? "Severe" : "Normal");
+
+      if (highCount >= 2 || (highCount === 1 && moderateCount >= 2)) {
+          setOverallDriftStatus("Severe");
+      }
+      else if (highCount === 1 || moderateCount >= 3) {
+          setOverallDriftStatus("Moderate");
+      }
+      else {
+          setOverallDriftStatus("Normal");
+      }
 
     } catch (err) {
       console.error("Drift Error:", err);
@@ -178,6 +192,13 @@ const App = () => {
     );
   }, [data, searchTerm]);
 
+  // --- DYNAMIC COLOR LOGIC ---
+  const getHQColor = () => {
+    if (activeTab === 'drift') return 'text-yellow-500';
+    if (activeTab === 'stats') return 'text-blue-600';
+    return 'text-red-600'; 
+  };
+
   return (
     <div className="min-h-screen bg-[#050505] text-gray-100 font-sans selection:bg-red-500/30 overflow-x-hidden pb-20">
       <motion.div 
@@ -191,7 +212,9 @@ const App = () => {
         {/* --- HEADER --- */}
         <header className="flex flex-col md:flex-row justify-between items-center mb-12 gap-4">
           <div className="flex-1">
-            <h1 className="text-5xl font-black text-white italic tracking-tighter">RETENTION <span className="text-red-600">HQ</span></h1>
+            <h1 className="text-5xl font-black text-white italic tracking-tighter">
+              RETENTION <span className={`${getHQColor()} transition-colors duration-500`}>HQ</span>
+            </h1>
             <p className="text-gray-500 font-medium uppercase tracking-[0.25em] text-[10px] mt-2">Enterprise ML Intelligence Console</p>
           </div>
 
@@ -230,8 +253,6 @@ const App = () => {
         {activeTab === 'churn' && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-12">
-              
-              {/* CHURN UPLOAD BAR (RED THEME) */}
               <div 
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -394,12 +415,12 @@ const App = () => {
         )}
 
         {/* ===================================================================================== */}
-        {/* PAGE 2: DRIFT DETECTION (YELLOW)                                                     */}
+        {/* PAGE 2: DRIFT DETECTION                                                              */}
         {/* ===================================================================================== */}
         {activeTab === 'drift' && (
            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
              
-             {/* DRIFT UPLOAD BAR (YELLOW THEME - COPIED FROM CHURN) */}
+             {/* DRIFT UPLOAD BAR */}
              <div 
                onDragOver={handleDragOver}
                onDragLeave={handleDragLeave}
@@ -432,35 +453,47 @@ const App = () => {
 
              {/* 2. OVERALL STATUS BANNER (Dynamic Color) */}
              {driftMetrics ? (
-                 <div className={`w-full p-6 rounded-2xl mb-8 border transition-all ${overallDriftStatus === "Severe" ? "bg-red-900/20 border-red-600/50" : "bg-green-900/20 border-green-600/50"}`}>
-                    <h2 className={`text-xl font-black uppercase tracking-tighter ${overallDriftStatus === "Severe" ? "text-red-500" : "text-green-500"}`}>
+                 <div className={`w-full p-6 rounded-2xl mb-8 border transition-all ${
+                     overallDriftStatus === "Severe" ? "bg-red-900/20 border-red-600/50" : 
+                     overallDriftStatus === "Moderate" ? "bg-yellow-900/20 border-yellow-600/50" :
+                     "bg-green-900/20 border-green-600/50"
+                 }`}>
+                    <h2 className={`text-xl font-black uppercase tracking-tighter ${
+                        overallDriftStatus === "Severe" ? "text-red-500" : 
+                        overallDriftStatus === "Moderate" ? "text-yellow-500" :
+                        "text-green-500"
+                    }`}>
                         Overall Drift Status: {overallDriftStatus}
                     </h2>
                  </div>
              ) : (
-                 <div className="h-64 flex flex-col items-center justify-center text-gray-500 border border-zinc-800 rounded-2xl border-dashed bg-zinc-900/20 mb-8">
-                    <p className="text-sm font-bold uppercase tracking-widest">Upload recent data to detect drift</p>
-                 </div>
+                 <motion.div key="empty-drift" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-96 border-2 border-dashed border-zinc-800 rounded-[2.5rem] flex flex-col items-center justify-center text-center p-6 bg-yellow-900/10">
+                  <div className="p-6 bg-zinc-900 rounded-full mb-6 border border-zinc-800"><Activity size={40} className="text-yellow-500/50 animate-pulse"/></div>
+                  <h3 className="text-sm font-bold text-yellow-500/50 uppercase tracking-widest">Drift Detection Standby</h3>
+                  <p className="text-xs text-gray-600 mt-2 max-w-xs italic leading-relaxed">Drag and drop a recent dataset to compare against baseline and detect feature drift.</p>
+                </motion.div>
              )}
 
-             {/* 3. METRICS GRID (Fail-Safe + Strict Logic) */}
+             {/* 3. METRICS GRID (Granular Coloring) */}
              {driftMetrics && (
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
                  {getDriftColumns().map(([feature, v]) => {
                    
                    if (typeof v !== 'object' || v === null) return null;
 
-                   const isSevere = v.psi > 0.25 || v.ks_pvalue < 0.05 || v.js_divergence > 0.10;
+                   // Individual feature status logic
+                   const isSevere = v.psi > 0.25;
+                   const isWarning = v.psi > 0.1 || v.js_divergence > 0.1;
+                   const statusLabel = isSevere ? "Drift Detected" : isWarning ? "Warning" : "Stable";
+                   const statusColor = isSevere ? "text-red-500" : isWarning ? "text-yellow-500" : "text-green-500";
 
                    return (
                    <div key={feature} className="bg-[#0a0a0a] border border-zinc-800 p-6 rounded-2xl relative overflow-hidden group hover:border-zinc-700 transition-colors">
                      
                      <div className="flex justify-between items-start mb-6">
                        <h3 className="text-xl font-bold text-white tracking-tight">{feature}</h3>
-                       <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded ${
-                         isSevere ? "text-red-500" : "text-green-500"
-                       }`}>
-                         {isSevere ? "Severe" : "Normal"}
+                       <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded ${statusColor}`}>
+                         {statusLabel}
                        </span>
                      </div>
 
@@ -508,7 +541,7 @@ const App = () => {
         {activeTab === 'stats' && (
           <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="space-y-12">
             
-            {/* STATS UPLOAD BAR (BLUE THEME - COPIED FROM CHURN) */}
+            {/* STATS UPLOAD BAR (BLUE THEME) */}
             <div 
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -652,13 +685,11 @@ const App = () => {
 
              {/* EMPTY STATE */}
              {!statsData && !statsLoading && (
-               <div className="h-96 flex flex-col items-center justify-center border border-dashed border-blue-900/30 rounded-[3rem] bg-blue-900/5">
-                 <div className="p-6 bg-blue-900/10 rounded-full mb-4">
-                    <BarChart3 size={40} className="text-blue-500/50" />
-                 </div>
-                 <h3 className="text-lg font-bold text-blue-200">Ready for Analysis</h3>
-                 <p className="text-xs text-blue-400/60 uppercase tracking-widest mt-2">Upload a dataset to generate insights</p>
-               </div>
+               <motion.div key="empty-stats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-96 border-2 border-dashed border-zinc-800 rounded-[2.5rem] flex flex-col items-center justify-center text-center p-6 bg-blue-900/10">
+                  <div className="p-6 bg-zinc-900 rounded-full mb-6 border border-zinc-800"><BarChart3 size={40} className="text-blue-500/50 animate-pulse"/></div>
+                  <h3 className="text-sm font-bold text-blue-500/50 uppercase tracking-widest">Analytics Engine Standby</h3>
+                  <p className="text-xs text-gray-600 mt-2 max-w-xs italic leading-relaxed">Drag and drop a dataset to generate automated EDA reports and visualization insights.</p>
+                </motion.div>
              )}
           </motion.div>
         )}
