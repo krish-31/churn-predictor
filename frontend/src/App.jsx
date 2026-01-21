@@ -45,6 +45,9 @@ const App = () => {
 
   // --- INITIALIZATION ---
   useEffect(() => {
+    // FORCE TITLE CHANGE (Fixes Vercel Cache Issue)
+    document.title = "Retention HQ | AI Intelligence";
+
     const checkHealth = async () => {
       try {
         await axios.get(`${API_BASE_URL}/`, { timeout: 5000 });
