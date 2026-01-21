@@ -42,7 +42,7 @@ const App = () => {
   useEffect(() => {
     const checkHealth = async () => {
       try {
-        await axios.get('http://127.0.0.1:8000/', { timeout: 5000 });
+        await axios.get('https://retention-hq.onrender.com/', { timeout: 5000 });
         setBackendHealth(true);
       } catch (err) {
         setBackendHealth(false);
@@ -51,7 +51,7 @@ const App = () => {
 
     const fetchModelStats = async () => {
       try {
-        const res = await axios.get('http://127.0.0.1:8000/model-stats');
+        const res = await axios.get('https://retention-hq.onrender.com/model-stats');
         setModelStats(res.data);
       } catch (err) {
         console.error("Failed to fetch model stats");
@@ -97,7 +97,7 @@ const App = () => {
     formData.append('file', file);
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/predict-batch', formData, {
+      const response = await axios.post('https://retention-hq.onrender.com/predict-batch', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setData(response.data.data);
@@ -120,7 +120,7 @@ const App = () => {
     formData.append('file', driftFile);
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/drift/analyze', formData, {
+      const response = await axios.post('https://retention-hq.onrender.com/drift/analyze', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       
@@ -169,7 +169,7 @@ const App = () => {
     const formData = new FormData();
     formData.append('file', statsFile);
     try {
-      const response = await axios.post('http://127.0.0.1:8000/stats/analyze', formData, {
+      const response = await axios.post('https://retention-hq.onrender.com/stats/analyze', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setStatsData(response.data);
