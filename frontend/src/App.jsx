@@ -6,7 +6,7 @@ import {
   Upload, FileText, BarChart3, Users, 
   AlertTriangle, DollarSign, Search, CheckCircle2,
   ChevronRight, Play, RefreshCcw, TrendingDown,
-  Activity, Target, Cpu, Layers, FileCode2, PieChart
+  Activity, Target, Cpu, Layers, FileCode2, PieChart, Film
 } from 'lucide-react';
 
 const App = () => {
@@ -31,6 +31,9 @@ const App = () => {
   const [statsLoading, setStatsLoading] = useState(false); 
 
   const [searchTerm, setSearchTerm] = useState("");
+  // --- NEW: Filter State ---
+  const [filterCategory, setFilterCategory] = useState("All"); 
+
   const [backendHealth, setBackendHealth] = useState(false);
   const [modelStats, setModelStats] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -89,6 +92,7 @@ const App = () => {
   const runPrediction = async () => {
     if (!file) return alert("Please upload a dataset first.");
     setLoading(true);
+    setFilterCategory("All"); // Reset filter on new run
     const formData = new FormData();
     formData.append('file', file);
 
@@ -185,12 +189,15 @@ const App = () => {
     });
   };
 
+  // --- FILTERING LOGIC ---
   const filteredData = useMemo(() => {
     if (!data) return [];
-    return data.filter(item => 
-      item.customer_id.toString().toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [data, searchTerm]);
+    return data.filter(item => {
+      const matchesSearch = item.customer_id.toString().toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesFilter = filterCategory === "All" || item.risk_category === filterCategory;
+      return matchesSearch && matchesFilter;
+    });
+  }, [data, searchTerm, filterCategory]);
 
   // --- DYNAMIC COLOR LOGIC ---
   const getHQColor = () => {
@@ -300,22 +307,34 @@ const App = () => {
             <AnimatePresence mode="wait">
               {summary ? (
                 <motion.div key="results" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-12">
-                    <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
-                      <div className="flex justify-between items-start mb-3"><Users className="text-blue-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Total Population</span></div>
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-12">
+                    {/* RESET FILTER CARD */}
+                    <div 
+                      onClick={() => setFilterCategory('All')}
+                      className={`bg-zinc-900/60 border p-5 rounded-2xl backdrop-blur-md cursor-pointer hover:border-blue-500/50 transition-all ${filterCategory === 'All' ? 'border-blue-500 ring-1 ring-blue-500/20' : 'border-zinc-800'}`}
+                    >
+                      <div className="flex justify-between items-start mb-3"><Users className="text-blue-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Total (Reset)</span></div>
                       <div className="text-2xl font-black text-gray-100">{summary.total_customers}</div>
                     </div>
                     <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
                       <div className="flex justify-between items-start mb-3"><BarChart3 className="text-purple-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Avg Churn Risk</span></div>
                       <div className="text-2xl font-black text-gray-100">{summary.avg_risk_score}%</div>
                     </div>
-                    <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
+                    {/* HIGH RISK FILTER CARD */}
+                    <div 
+                      onClick={() => setFilterCategory('High')}
+                      className={`bg-zinc-900/60 border p-5 rounded-2xl backdrop-blur-md cursor-pointer hover:border-red-500/50 transition-all ${filterCategory === 'High' ? 'border-red-500 ring-1 ring-red-500/20' : 'border-zinc-800'}`}
+                    >
                       <div className="flex justify-between items-start mb-3"><AlertTriangle className="text-red-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">High Risk</span></div>
                       <div className="text-2xl font-black text-gray-100">{summary.high_risk_count}</div>
                     </div>
                     <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
                       <div className="flex justify-between items-start mb-3"><DollarSign className="text-yellow-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Revenue Risk</span></div>
                       <div className="text-2xl font-black text-gray-100">${summary.revenue_at_risk.toLocaleString()}</div>
+                    </div>
+                    <div className="bg-zinc-900/60 border border-zinc-800 p-5 rounded-2xl backdrop-blur-md">
+                      <div className="flex justify-between items-start mb-3"><Film className="text-pink-500" size={16}/><span className="text-[8px] font-black text-gray-500 uppercase tracking-widest">Max Risk Genre</span></div>
+                      <div className="text-2xl font-black text-gray-100 truncate">{summary.top_churn_genre}</div>
                     </div>
                   </div>
 
@@ -325,21 +344,25 @@ const App = () => {
                       <h3 className="text-[10px] font-black uppercase text-gray-500 tracking-widest mb-8 flex items-center gap-2">
                         <Users size={14}/> Segmentation Breakdown
                       </h3>
-                      <div className="space-y-8">
+                      <div className="space-y-4">
                         {[
-                          { label: 'High Risk', count: summary.high_risk_count, color: 'bg-red-600' },
-                          { label: 'Medium Risk', count: summary.medium_risk_count, color: 'bg-yellow-600' },
-                          { label: 'Low Risk', count: summary.low_risk_count, color: 'bg-green-600' }
+                          { label: 'High Risk', count: summary.high_risk_count, color: 'bg-red-600', filter: 'High' },
+                          { label: 'Medium Risk', count: summary.medium_risk_count, color: 'bg-yellow-600', filter: 'Medium' },
+                          { label: 'Low Risk', count: summary.low_risk_count, color: 'bg-green-600', filter: 'Low' }
                         ].map((seg, i) => (
-                          <div key={i}>
+                          <div 
+                            key={i} 
+                            onClick={() => setFilterCategory(seg.filter)}
+                            className={`cursor-pointer p-3 rounded-xl transition-all border ${filterCategory === seg.filter ? 'bg-zinc-800 border-gray-600' : 'border-transparent hover:bg-zinc-800/50'}`}
+                          >
                             <div className="flex justify-between text-[10px] font-bold mb-2">
                               <span className="text-gray-400">{seg.label}</span>
                               <span className="text-gray-100">
                                 {summary.total_customers > 0 ? Math.round((seg.count / summary.total_customers) * 100) : 0}% 
-                                <span className="text-gray-500 ml-1">({seg.count} Users)</span>
+                                <span className="text-gray-500 ml-1">({seg.count})</span>
                               </span>
                             </div>
-                            <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                            <div className="w-full bg-zinc-900 h-1.5 rounded-full overflow-hidden">
                               <motion.div initial={{ width: 0 }} animate={{ width: `${(seg.count / summary.total_customers) * 100}%` }} transition={{ duration: 1, ease: "easeOut" }} className={`${seg.color} h-full`} />
                             </div>
                           </div>
@@ -349,7 +372,14 @@ const App = () => {
 
                     <div className="lg:col-span-3 bg-zinc-900/40 border border-zinc-800 rounded-3xl overflow-hidden backdrop-blur-md shadow-2xl">
                       <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/20">
-                        <h2 className="text-sm font-black uppercase tracking-tighter flex items-center gap-2">Analysis Drill-Down</h2>
+                        <div className="flex items-center gap-4">
+                          <h2 className="text-sm font-black uppercase tracking-tighter flex items-center gap-2">Analysis Drill-Down</h2>
+                          {filterCategory !== 'All' && (
+                            <span className="px-2 py-1 bg-white/10 rounded text-[9px] font-bold uppercase text-white border border-white/20">
+                              Filtered: {filterCategory} Risk
+                            </span>
+                          )}
+                        </div>
                         <div className="relative flex-1 max-w-sm ml-4">
                           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-600" size={14}/>
                           <input placeholder="Search Customer ID..." className="w-full bg-black/40 border border-zinc-800 rounded-full py-2.5 pl-10 pr-4 text-xs outline-none focus:ring-1 focus:ring-red-600 transition-all" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
@@ -369,7 +399,8 @@ const App = () => {
                           <tbody className="divide-y divide-zinc-800/50">
                             {filteredData.map((row, idx) => (
                               <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
-                                <td className="px-8 py-5 font-mono text-xs text-red-500 font-bold italic">{row.customer_id.toString().slice(0, 15)}...</td>
+                                {/* CUSTOMER ID COLOR CHANGED TO INDIGO/NEUTRAL */}
+                                <td className="px-8 py-5 font-mono text-xs text-indigo-300 font-bold italic">{row.customer_id.toString().slice(0, 15)}...</td>
                                 <td className="px-6 py-5 text-center font-black text-lg">{row.churn_probability}%</td>
                                 <td className="px-6 py-5 text-center"><span className="px-2 py-1 rounded border border-blue-500/20 bg-blue-500/10 text-[9px] font-black text-blue-400 uppercase whitespace-nowrap inline-flex items-center justify-center w-28">{row.persona}</span></td>
                                 <td className="px-6 py-5 text-center"><span className={`px-3 py-1 rounded text-[9px] font-black uppercase tracking-widest ${row.risk_category === 'High' ? 'bg-red-500/10 text-red-500' : row.risk_category === 'Medium' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-green-500/10 text-green-500'}`}>{row.risk_category}</span></td>
@@ -378,6 +409,9 @@ const App = () => {
                             ))}
                           </tbody>
                         </table>
+                        {filteredData.length === 0 && (
+                          <div className="text-center py-12 text-gray-500 text-xs italic">No customers found for this category or search term.</div>
+                        )}
                       </div>
                     </div>
                   </div>
