@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import io
 import os
 from dotenv import load_dotenv
-import google.generativeai as genai
+from groq import Groq  # <--- NEW IMPORT
 import time
 import json
 import plotly.express as px
@@ -19,7 +19,7 @@ except ImportError:
     print("⚠️ Warning: 'drift' module not found. Ensure 'drift' folder is in 'backend'.")
     DriftDetector = None
 
-# --- CRITICAL FIX: Load .env from the CURRENT directory (backend) ---
+# --- CRITICAL FIX: Load .env from the CURRENT directory ---
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 app = FastAPI(title="OTT Churn Batch Engine")
@@ -31,40 +31,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load API key
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if not GOOGLE_API_KEY:
-    print("❌ ERROR: GOOGLE_API_KEY is missing. Check your .env file.")
+# --- GROQ CLIENT SETUP ---
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+groq_client = None
 
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-model = None
-
-# --- AUTO-DETECT WORKING MODEL ---
-def get_best_available_model():
-    if not GOOGLE_API_KEY: return None
+if not GROQ_API_KEY:
+    print("❌ ERROR: GROQ_API_KEY is missing. Check your .env file.")
+else:
     try:
-        print("🔍 Scanning for available Gemini models...")
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-        
-        priorities = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']
-        for p in priorities:
-            if p in available_models:
-                print(f"✅ Found Optimal Model: {p}")
-                return genai.GenerativeModel(p)
-        
-        if available_models:
-            print(f"⚠️ Using Fallback Model: {available_models[0]}")
-            return genai.GenerativeModel(available_models[0])
-        return None
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        print("✅ Groq Client Initialized (Llama 3 Engine Ready)")
     except Exception as e:
-        print(f"⚠️ Model Auto-Detect Failed: {e}")
-        return None
-
-model = get_best_available_model()
+        print(f"❌ Groq Init Failed: {e}")
 
 # --- MODEL LOADING ---
 models = {}
@@ -90,7 +68,7 @@ def load_local_models():
 
 load_local_models()
 
-# --- MERGE: DRIFT DETECTOR INITIALIZATION ---
+# --- DRIFT DETECTOR INITIALIZATION ---
 drift_detector = None
 baseline_df = None
 
@@ -125,11 +103,14 @@ ai_call_counter = 0
 def generate_smart_insight(row):
     global ai_call_counter
     risk = row['churn_probability']
+    
+    # Fallback Logic
     if risk > 75: fallback = "Critical: Reactivation Phone Call + 50% Win-back Offer"
     elif risk > 40: fallback = f"Medium: Send targeted email for {row['favorite_genre']} content."
     else: fallback = "Healthy: Include in monthly newsletter."
 
-    if risk > 75 and ai_call_counter < 5 and model:
+    # Trigger AI only for High Risk (limit calls to prevent rate limits if massive batch)
+    if risk > 75 and ai_call_counter < 10 and groq_client:
         try:
             ai_call_counter += 1 
             prompt = (
@@ -137,10 +118,14 @@ def generate_smart_insight(row):
                 f"Genre {row['favorite_genre']}, Inactive {row['last_login_days']} days. "
                 f"Act as a retention expert. Write a strictly 1-sentence specific marketing action."
             )
-            response = model.generate_content(prompt)
-            return "✨ AI: " + response.text.strip()
+            
+            completion = groq_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile", 
+            )
+            return "✨ AI: " + completion.choices[0].message.content.strip()
         except Exception as e:
-            print(f"Gemini API Error: {e}")
+            print(f"Groq API Error: {e}")
             return fallback
     return fallback
 
@@ -152,9 +137,6 @@ def health():
 def get_model_stats():
     return MODEL_METRICS
 
-# ==========================================
-# 📊 NEW ENDPOINT: STATS / EDA (BLUE THEME)
-# ==========================================
 @app.post("/stats/analyze")
 async def analyze_stats(file: UploadFile = File(...)):
     try:
@@ -225,7 +207,6 @@ async def analyze_stats(file: UploadFile = File(...)):
         print(f"Stats Analysis Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/drift/analyze")
 async def analyze_drift_endpoint(file: UploadFile = File(...)):
     if not drift_detector or baseline_df is None:
@@ -239,7 +220,6 @@ async def analyze_drift_endpoint(file: UploadFile = File(...)):
     except Exception as e:
         print(f"Drift Analysis Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/predict-batch")
 async def predict_batch(file: UploadFile = File(...)):
@@ -285,9 +265,8 @@ async def predict_batch(file: UploadFile = File(...)):
         df['risk_category'] = df['churn_probability'].apply(lambda x: 'High' if x > 75 else 'Medium' if x > 40 else 'Low')
 
         for index, row in df.iterrows():
-            if row['churn_probability'] > 75 and ai_call_counter < 5:
+            if row['churn_probability'] > 75 and ai_call_counter < 10:
                 df.at[index, 'insight'] = generate_smart_insight(row)
-                time.sleep(2) 
             else:
                 df.at[index, 'insight'] = generate_smart_insight(row)
 
