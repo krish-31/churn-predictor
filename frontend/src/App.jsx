@@ -96,13 +96,40 @@ const App = () => {
     validateAndSetFile(droppedFile, type);
   };
 
+  const loadSampleDataset = async (e, type) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      if (type === 'churn') setLoading(true);
+      if (type === 'drift') setDriftLoading(true);
+      if (type === 'stats') setStatsLoading(true);
+
+      const response = await axios.get(`${API_BASE_URL}/sample-dataset`, {
+        responseType: 'blob'
+      });
+      const sampleFile = new File([response.data], 'sample_netflix_churn.csv', { type: 'text/csv' });
+      validateAndSetFile(sampleFile, type);
+
+      if (type === 'churn') await runPrediction(sampleFile);
+      if (type === 'drift') await runDriftAnalysis(sampleFile);
+      if (type === 'stats') await runStatsAnalysis(sampleFile);
+    } catch (err) {
+      console.error("Error loading sample dataset:", err);
+      alert("Failed to load sample dataset.");
+      if (type === 'churn') setLoading(false);
+      if (type === 'drift') setDriftLoading(false);
+      if (type === 'stats') setStatsLoading(false);
+    }
+  };
+
   // --- 1. RUN PREDICTION ---
-  const runPrediction = async () => {
-    if (!file) return alert("Please upload a dataset first.");
+  const runPrediction = async (customFile) => {
+    const fileToProcess = (customFile instanceof File) ? customFile : file;
+    if (!fileToProcess) return alert("Please upload a dataset first.");
     setLoading(true);
     setFilterCategory("All");
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', fileToProcess);
 
     try {
       const response = await axios.post(`${API_BASE_URL}/predict-batch`, formData, {
@@ -119,13 +146,14 @@ const App = () => {
   };
 
   // --- 2. RUN DRIFT ANALYSIS ---
-  const runDriftAnalysis = async () => {
-    if (!driftFile) return alert("Please upload a dataset for drift analysis.");
+  const runDriftAnalysis = async (customFile) => {
+    const fileToProcess = (customFile instanceof File) ? customFile : driftFile;
+    if (!fileToProcess) return alert("Please upload a dataset for drift analysis.");
     setDriftLoading(true);
     setDriftMetrics(null); 
     
     const formData = new FormData();
-    formData.append('file', driftFile);
+    formData.append('file', fileToProcess);
 
     try {
       const response = await axios.post(`${API_BASE_URL}/drift/analyze`, formData, {
@@ -160,12 +188,13 @@ const App = () => {
   };
 
   // --- 3. RUN STATS ANALYSIS ---
-  const runStatsAnalysis = async () => {
-    if (!statsFile) return alert("Please upload a dataset.");
+  const runStatsAnalysis = async (customFile) => {
+    const fileToProcess = (customFile instanceof File) ? customFile : statsFile;
+    if (!fileToProcess) return alert("Please upload a dataset.");
     setStatsLoading(true);
     setStatsData(null);
     const formData = new FormData();
-    formData.append('file', statsFile);
+    formData.append('file', fileToProcess);
     try {
       const response = await axios.post(`${API_BASE_URL}/stats/analyze`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -242,7 +271,7 @@ const App = () => {
                 onDrop={(e) => handleDrop(e, 'churn')}
                 className={`lg:col-span-3 bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 ${isDragging ? 'border-red-600 bg-red-600/5 scale-[1.01]' : 'border-zinc-800'}`}
               >
-                <div className="flex-1 w-full">
+                <div className="flex-1 w-full flex flex-col items-start gap-2">
                   <label className="flex items-center gap-4 cursor-pointer group">
                     <div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-red-600 text-white border-red-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-red-500/50 group-hover:text-red-500'}`}>
                       <Upload size={24} className={isDragging ? 'animate-bounce' : ''} />
@@ -253,6 +282,7 @@ const App = () => {
                     </div>
                     <input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'churn')} accept=".csv, .xlsx" />
                   </label>
+                  <button onClick={(e) => loadSampleDataset(e, 'churn')} className="ml-[72px] px-3 py-1.5 bg-red-600/10 hover:bg-red-600/20 border border-red-600/30 rounded text-[10px] font-black text-red-500 uppercase tracking-widest transition-colors flex items-center gap-1.5"><FileText size={12}/> Load Sample Dataset</button>
                 </div>
                 <button onClick={runPrediction} disabled={loading || !file} className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-zinc-800 disabled:text-gray-500 rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 active:scale-95 shadow-lg shadow-red-900/20">{loading ? <RefreshCcw className="animate-spin" size={18}/> : <><Play size={16} fill="currentColor"/> Process Batch</>}</button>
               </div>
@@ -363,7 +393,7 @@ const App = () => {
         {activeTab === 'drift' && (
            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
              <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, 'drift')} className={`w-full bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 mb-8 ${isDragging ? 'border-yellow-500 bg-yellow-500/5 scale-[1.01]' : 'border-zinc-800'}`}>
-               <div className="flex-1 w-full"><label className="flex items-center gap-4 cursor-pointer group"><div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-yellow-500 text-black border-yellow-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-yellow-500/50 group-hover:text-yellow-500'}`}><Activity size={24} className={isDragging ? 'animate-bounce' : ''} /></div><div><p className="text-sm font-bold text-gray-200">{driftFile ? driftFile.name : isDragging ? "Drop File Here" : "Upload Recent Dataset for Drift Analysis"}</p><p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p></div><input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'drift')} accept=".csv, .xlsx" /></label></div>
+               <div className="flex-1 w-full flex flex-col items-start gap-2"><label className="flex items-center gap-4 cursor-pointer group"><div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-yellow-500 text-black border-yellow-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-yellow-500/50 group-hover:text-yellow-500'}`}><Activity size={24} className={isDragging ? 'animate-bounce' : ''} /></div><div><p className="text-sm font-bold text-gray-200">{driftFile ? driftFile.name : isDragging ? "Drop File Here" : "Upload Recent Dataset for Drift Analysis"}</p><p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p></div><input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'drift')} accept=".csv, .xlsx" /></label><button onClick={(e) => loadSampleDataset(e, 'drift')} className="ml-[72px] px-3 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30 rounded text-[10px] font-black text-yellow-500 uppercase tracking-widest transition-colors flex items-center gap-1.5"><FileText size={12}/> Load Sample Dataset</button></div>
                <button onClick={runDriftAnalysis} disabled={driftLoading || !driftFile} className="px-8 py-4 bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-gray-500 text-black rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 active:scale-95 shadow-lg shadow-yellow-500/20">{driftLoading ? <RefreshCcw className="animate-spin" size={18}/> : "Analyze Drift"}</button>
              </div>
              {driftMetrics ? (
@@ -397,7 +427,7 @@ const App = () => {
         {activeTab === 'stats' && (
           <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="space-y-12">
             <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, 'stats')} className={`w-full bg-zinc-900/40 border-2 rounded-2xl p-6 backdrop-blur-xl flex flex-col md:flex-row items-center justify-between gap-6 transition-all duration-300 ${isDragging ? 'border-blue-600 bg-blue-600/5 scale-[1.01]' : 'border-zinc-800'}`}>
-                <div className="flex-1 w-full"><label className="flex items-center gap-4 cursor-pointer group"><div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-blue-600 text-white border-blue-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-blue-500/50 group-hover:text-blue-500'}`}><PieChart size={24} className={isDragging ? 'animate-bounce' : ''} /></div><div><p className="text-sm font-bold text-gray-200">{statsFile ? statsFile.name : isDragging ? "Drop File Here" : "Upload Dataset for Analysis"}</p><p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p></div><input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'stats')} accept=".csv, .xlsx" /></label></div>
+                <div className="flex-1 w-full flex flex-col items-start gap-2"><label className="flex items-center gap-4 cursor-pointer group"><div className={`p-4 rounded-xl transition-all border ${isDragging ? 'bg-blue-600 text-white border-blue-500' : 'bg-zinc-800 text-gray-400 border-zinc-700 group-hover:border-blue-500/50 group-hover:text-blue-500'}`}><PieChart size={24} className={isDragging ? 'animate-bounce' : ''} /></div><div><p className="text-sm font-bold text-gray-200">{statsFile ? statsFile.name : isDragging ? "Drop File Here" : "Upload Dataset for Analysis"}</p><p className="text-[10px] text-gray-500 uppercase font-black tracking-tighter mt-1 italic">Supports .csv and .xlsx formats</p></div><input type="file" className="hidden" onChange={(e) => validateAndSetFile(e.target.files[0], 'stats')} accept=".csv, .xlsx" /></label><button onClick={(e) => loadSampleDataset(e, 'stats')} className="ml-[72px] px-3 py-1.5 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-600/30 rounded text-[10px] font-black text-blue-500 uppercase tracking-widest transition-colors flex items-center gap-1.5"><FileText size={12}/> Load Sample Dataset</button></div>
                 <button onClick={runStatsAnalysis} disabled={statsLoading || !statsFile} className="px-8 py-4 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-800 disabled:text-gray-500 text-white rounded-xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 active:scale-95 shadow-lg shadow-blue-600/20">{statsLoading ? "Processing..." : "Visualize Data"}</button>
             </div>
 

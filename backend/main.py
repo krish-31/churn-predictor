@@ -2,6 +2,7 @@ import pickle
 import pandas as pd
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import os
@@ -136,6 +137,18 @@ def health():
 @app.get("/model-stats")
 def get_model_stats():
     return MODEL_METRICS
+
+@app.get("/sample-dataset")
+def get_sample_dataset():
+    """Serve the sample dataset for users who want to try the platform."""
+    sample_path = os.path.join(os.path.dirname(__file__), "data", "sample_churn.csv")
+    if not os.path.exists(sample_path):
+        raise HTTPException(status_code=404, detail="Sample dataset not found.")
+    return FileResponse(
+        sample_path,
+        media_type="text/csv",
+        filename="sample_netflix_churn.csv",
+    )
 
 @app.post("/stats/analyze")
 async def analyze_stats(file: UploadFile = File(...)):
